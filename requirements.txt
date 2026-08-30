@@ -1,0 +1,13 @@
+opencv-python-headless
+numpy
+scipy
+pillow
+fingerprint-enhancer
+jpype1
+cbor2
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic-settings
+pillow-heif
+cryptography
