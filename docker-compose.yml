@@ -1,0 +1,13 @@
+services:
+  fingerphoto:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - fingerphoto-data:/data  # must be a local filesystem (SQLite WAL), not NFS
+    restart: unless-stopped
+    mem_limit: 2g  # Python + OpenCV buffers + 512m JVM heap + two Gabor runs
+
+volumes:
+  fingerphoto-data:
