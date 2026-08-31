@@ -58,7 +58,23 @@ def photo_to_ridge_image(
             period = estimate_ridge_period(gray)
     info["initial_period_px"] = round(period, 2)
 
+    # The closed loop may only refine WITHIN the physical prior. The correction
+    # below used to be unbounded, and period_band constrained only the initial
+    # estimate — so on a soft crop, where the enhanced map carries no true
+    # ridges, `achieved` comes back biased high (few FFT bins survive on an
+    # ever-shrinking image, and they quantise upward) and the period inflated
+    # ~1.33x per iteration without ever converging: 28.8 -> 38.3 -> 49.5 ->
+    # 59.4 px on a 1023 px crop, i.e. 17 ridges across a thumb, rescaling the
+    # print down to 165x181 px. The loop then returned that LAST, worst value.
+    # Templates extracted from such a run still cleared the minutiae gate, so
+    # the garbage entered the gallery silently and matched nothing.
+    lo, hi = period_band if period_band is not None else (period / 2.0, period * 2.0)
+
+    # Keep the iteration that landed CLOSEST to target, not the most recent —
+    # a diverging loop's last step is its worst.
+    best: tuple[float, np.ndarray, float, float, tuple, np.ndarray, np.ndarray] | None = None
     for attempt in range(1, MAX_SCALE_ITERATIONS + 1):
+        period = min(max(period, lo), hi)
         scaled, factor = normalize_scale(gray, period)
 
         inv = 255 - scaled
@@ -69,8 +85,8 @@ def photo_to_ridge_image(
         try:
             enhanced = _gabor_enhance(contrasted)
         except ValueError:
-            if attempt > 1:
-                break  # keep the previous iteration's result
+            if best is not None:
+                break  # keep the best earlier iteration
             raise
 
         if mask is not None:
@@ -83,22 +99,35 @@ def photo_to_ridge_image(
             enhanced[scaled_mask == 0] = 255  # white = valley/background
 
         if forced:
+            best = (0.0, enhanced, period, factor, scaled.shape, scaled, contrasted)
             break
         try:
             achieved = estimate_ridge_period(
                 enhanced, min_period=TARGET_PERIOD * 0.6, max_period=TARGET_PERIOD * 1.8
             )
         except ValueError:
+            if best is None:
+                best = (float("inf"), enhanced, period, factor, scaled.shape, scaled, contrasted)
             break
-        info["achieved_period_px"] = round(achieved, 2)
-        if abs(achieved - TARGET_PERIOD) <= PERIOD_TOLERANCE:
+        err = abs(achieved - TARGET_PERIOD)
+        if best is None or err < best[0]:
+            best = (err, enhanced, period, factor, scaled.shape, scaled, contrasted)
+            info["achieved_period_px"] = round(achieved, 2)
+        if err <= PERIOD_TOLERANCE:
             break
-        period *= achieved / TARGET_PERIOD
+        nxt = min(max(period * achieved / TARGET_PERIOD, lo), hi)
+        if abs(nxt - period) < 1e-3:
+            break  # the correction wants to leave the physical band — stop
+        period = nxt
 
+    err, enhanced, period, factor, shape, scaled, contrasted = best
     info["ridge_period_px"] = round(period, 2)
     info["scale_factor"] = round(factor, 4)
     info["scale_iterations"] = attempt
-    info["scaled_shape"] = scaled.shape
+    info["scaled_shape"] = shape
+    # Did the loop actually reach the target? Callers (and the quality gate)
+    # need to know that a template came from an unconverged scale estimate.
+    info["scale_converged"] = bool(err <= PERIOD_TOLERANCE)
     _save(out_dir, "2_scaled.png", scaled)
     _save(out_dir, "3_contrast.png", contrasted)
     _save(out_dir, "4_enhanced.png", enhanced)

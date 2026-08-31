@@ -169,13 +169,21 @@ def enroll_photos(
                 )
                 audit(con, "photo.enroll", identity_uuid, request_id, "rejected", e.code.value)
                 continue
+            now = time.time()
             stored_name = safe
             if _store_originals() and original is not None:
                 dest.mkdir(parents=True, exist_ok=True)
                 data, scheme = crypto.encrypt(original, key)
-                stored_name = safe + (".enc" if scheme else "")
+                # Uniquify: every capture from the web UI arrives as
+                # "capture.jpg", so a bare filename silently OVERWRITES the
+                # previous enrollment's original. SourceAFIS templates have no
+                # backward compatibility and cannot be re-extracted without the
+                # source image, so that overwrite is unrecoverable data loss.
+                stem, _, ext = safe.rpartition(".")
+                stored_name = (f"{stem or safe}_{int(now)}"
+                               + (f".{ext}" if stem else "")
+                               + (".enc" if scheme else ""))
                 (dest / stored_name).write_bytes(data)
-            now = time.time()
             with con:
                 for t in templates:
                     blob, scheme = crypto.encrypt(t, key)

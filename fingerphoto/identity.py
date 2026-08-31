@@ -17,11 +17,21 @@ import numpy as np
 from . import afis
 from .errors import AcquisitionError, ReasonCode
 from .pipeline import photo_to_ridge_image
-from .scale import ridge_period_band_for_fingertip
+from .scale import ridge_evidence, ridge_period_band_for_fingertip
 from .segment import crop_distal
 
 SCALE_SWEEP = (0.87, 1.0, 1.15)
 MIN_MINUTIAE = 15  # quality gate: refuse templates with fewer minutiae
+# NOTE: minutiae count does NOT prove a print was captured. The Gabor stage is
+# an oriented band-pass filter, so fed an out-of-focus finger it still emits
+# ridge-like texture and SourceAFIS finds minutiae in the hallucination. A
+# phone web capture scoring 96 minutiae matched the SAME THUMB's good photos at
+# 24.4 (threshold 40), and forcing the scale across a 5.4x range never
+# recovered it. Gating on raw ridge-frequency energy (scale.ridge_evidence) was
+# tried and REJECTED: on the full fixture set no statistic separated — see that
+# function's docstring for the numbers. It is still recorded in `stats` for
+# observability, but nothing is gated on it. Finding a real no-ridges-present
+# detector is open work.
 
 
 def _templates_for_crop(
@@ -31,8 +41,12 @@ def _templates_for_crop(
     sweep: tuple[float, ...],
     out_dir: Path | None,
     min_minutiae: int = MIN_MINUTIAE,
+    seen: list[float] | None = None,
 ) -> list[bytes]:
     band = ridge_period_band_for_fingertip(bgr.shape[1])
+    if seen is not None:
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
+        seen.append(ridge_evidence(gray, band[0], band[1])[1])
     ridge, info = photo_to_ridge_image(
         bgr, out_dir=out_dir, period_band=band, mask=mask, initial_period=hint
     )
@@ -69,11 +83,15 @@ def photo_template_set(
     `stats`, when given, is filled with per-stage wall times and counts."""
     if stats is None:
         stats = {}
+    ev: list[float] = []  # ridge-frequency energy seen per crop strategy
     if not crop:
         t0 = time.monotonic()
-        templates = _templates_for_crop(bgr, None, None, sweep, out_dir, min_minutiae)
+        templates = _templates_for_crop(
+            bgr, None, None, sweep, out_dir, min_minutiae, seen=ev
+        )
         stats["full_frame_s"] = round(time.monotonic() - t0, 3)
         stats["templates"] = len(templates)
+        stats["ridge_evidence"] = round(max(ev, default=0.0), 2)
         if not templates:
             raise AcquisitionError(
                 ReasonCode.QUALITY_TOO_LOW,
@@ -87,7 +105,7 @@ def photo_template_set(
     try:  # proven path for protocol (finger-up) captures
         c, m = crop_distal(bgr)
         crops_found += 1
-        templates += _templates_for_crop(c, m, None, sweep, out_dir, min_minutiae)
+        templates += _templates_for_crop(c, m, None, sweep, out_dir, min_minutiae, seen=ev)
     except (ValueError, cv2.error):
         pass
     stats["crop_distal_s"] = round(time.monotonic() - t0, 3)
@@ -98,12 +116,14 @@ def photo_template_set(
         c, m, hint = crop_pad(bgr)
         crops_found += 1
         templates += _templates_for_crop(
-            c, m, hint, sweep, (out_dir / "pad" if out_dir else None), min_minutiae
+            c, m, hint, sweep, (out_dir / "pad" if out_dir else None),
+            min_minutiae, seen=ev,
         )
     except (ValueError, cv2.error):
         pass
     stats["crop_pad_s"] = round(time.monotonic() - t0, 3)
     stats["templates"] = len(templates)
+    stats["ridge_evidence"] = round(max(ev, default=0.0), 2)
     if not templates:
         if crops_found == 0:
             raise AcquisitionError(

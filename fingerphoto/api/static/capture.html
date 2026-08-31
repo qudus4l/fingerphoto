@@ -45,9 +45,11 @@
   button{width:100%;padding:14px;border-radius:10px;border:0;font-size:17px;
          font-weight:600;background:var(--accent);color:#08131f}
   button:disabled{background:#26303b;color:#5d6875}
-  button.secondary{background:transparent;color:var(--muted);
-                   border:1px solid var(--line);margin-top:7px;font-size:14px;
-                   font-weight:500;padding:10px}
+  .sizer{display:flex;gap:6px;align-items:center;margin-top:8px;flex:0 0 auto}
+  .sizer button{width:46px;padding:8px;font-size:20px;background:var(--panel);
+                color:var(--text);border:1px solid var(--line)}
+  #sizelab{flex:1;text-align:center;font-size:12px;color:var(--muted);
+           font-family:ui-monospace,Menlo,monospace}
   #meta{font-size:11px;color:#5d6875;text-align:center;padding-bottom:6px;
         flex:0 0 auto;font-family:ui-monospace,Menlo,monospace}
   .modes{display:flex;gap:6px;padding-top:10px;flex:0 0 auto}
@@ -85,6 +87,12 @@
     </svg>
   </div>
 
+  <div class="sizer">
+    <button id="smaller" title="Smaller outline">–</button>
+    <div id="sizelab">outline</div>
+    <button id="bigger" title="Bigger outline">+</button>
+  </div>
+
   <div class="checks">
     <div class="check" id="c-fill"><div class="label">Fill</div><div class="val">–</div></div>
     <div class="check" id="c-focus"><div class="label">Focus</div><div class="val">–</div></div>
@@ -94,47 +102,46 @@
   <div id="status">Starting camera…</div>
 
   <div class="actions">
-    <button id="shoot" disabled>Hold steady…</button>
-    <button id="force" class="secondary">Capture anyway (override checks)</button>
+    <button id="shoot">Capture</button>
   </div>
   <div id="meta"></div>
 
 <script>
-// --- Geometry, derived from physical measurements -------------------------
+// --- Geometry -------------------------------------------------------------
 // Ridge-to-ridge spacing averages 0.46 mm and an adult thumb is ~20 mm wide,
-// so a thumb N px wide gives a ridge period of ~N*0.023 px. Targeting ~15 px
-// per ridge (the pipeline rescales to 8, so ~2x oversampled) needs ~650 px.
-// Verified against our own photos: thumb_6172 is 734 px wide, 15.2 px period.
-// The target is a pixel COUNT, so its share of the frame depends on the
-// stream resolution and is computed per device.
-// 560px -> ~12.9px ridge period, still ~1.6x oversampled before the pipeline
-// rescales to 8px. Deliberately LOWER than the 650 first shipped: a phone's
-// main wide lens stops focusing around 10-15cm, and a web page cannot switch
-// to the ultrawide/macro camera the way the native app does. Evidence: a
-// guided capture at 26.3 px/mm focused and gave 100 minutiae, while one at
-// 30.2 px/mm (physically closer) could not focus and gave garbage. Asking for
-// a slightly smaller thumb keeps users where the lens still works.
-const TARGET_THUMB_PX = 560;
+// so a thumb N px wide gives a ridge period of ~N*0.023 px. The pipeline
+// rescales to an 8 px period, so anything above ~350 px carries enough ridge
+// detail; beyond that, more is simply more.
+//
+// The outline size is now USER-ADJUSTABLE and remembered. Three different
+// fixed values were shipped (700, 650, 560) and each was wrong on some device:
+// the number that matters is not the pixel count but whether that framing sits
+// inside the lens's minimum focus distance, which varies per phone and per
+// camera and cannot be measured from here. A small outline also leaves the
+// thumb as a small object in a deep scene, which is exactly when autofocus
+// locks onto the background instead. Default big; let the user back off.
+const DEFAULT_TARGET_PX = 1000, MIN_TARGET_PX = 350, MAX_TARGET_PX = 2200;
+let targetPx = +localStorage.getItem('fp_target') || DEFAULT_TARGET_PX;
 // Only the WIDTH carries the scale; crop_distal finds the pad in the full
 // photo regardless, so height is pure ergonomics.
-// MIN_FRAC must stay below TARGET/(widest stream) or it silently overrides the
-// target on high-resolution sensors — at 3024px wide, a 0.22 floor demanded
-// 665px however small the target was set.
-const ASPECT = 1.45, MIN_FRAC = 0.16, MAX_FRAC = 0.72;
+const ASPECT = 1.45, MIN_FRAC = 0.12, MAX_FRAC = 0.86;
 const MIN_FILL = 0.55, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
-// Focus is judged RELATIVE to the sharpest frame this device has produced, not
-// against an absolute number. Measured values vary hugely by sensor and scene:
-// a good hand-held photo scored 16.6 while a good guided capture scored 5.7 and
-// a blurred one 3.2 — no fixed threshold separates those. The peak decays so
-// the bar falls if you move somewhere darker.
-const FOCUS_FLOOR = 3.5, FOCUS_RATIO = 0.65, PEAK_DECAY = 0.997;
+// Focus is judged relative to the sharpest frame seen IN THE LAST ~1.5 s, not
+// against an absolute number (sensor- and scene-dependent: a good hand-held
+// photo scored 16.6, a good guided capture 5.7, a blurred one 3.2) and not
+// against an all-time peak. An all-time peak only ratchets up: one sharp frame
+// — a glimpse of the background while re-aiming — set the bar to 37 when the
+// achievable reading was 7, and the decay was far too slow to recover. A
+// rolling window can always be satisfied by holding still.
+const FOCUS_WIN = 90, FOCUS_FLOOR = 3.0, FOCUS_RATIO = 0.72;
 const BURST = 5, BURST_MS = 110;
 
 const $ = id => document.getElementById(id);
 const video = $('v'), stage = $('stage');
 const work = document.createElement('canvas');
 const wctx = work.getContext('2d', {willReadFrequently:true});
-let box = null, busy = false, sticky = '', mode = 'enroll', focusPeak = 0;
+let box = null, busy = false, sticky = '', mode = 'enroll';
+let focusHist = [];
 
 function say(msg, kind){          // status the tick loop will not clobber
   const el = $('status');
@@ -154,7 +161,6 @@ function setMode(m){
     b.classList.toggle('on', b.dataset.mode === m));
   $('name').style.display = (m === 'enroll') ? '' : 'none';
   $('key').style.flex = (m === 'enroll') ? '0 0 42%' : '1';
-  $('shoot').textContent = 'Hold steady…';
   sticky = '';
 }
 
@@ -178,16 +184,20 @@ function silhouettePath(){
   // The viewBox is a 0..100 square stretched over the frame, so X and Y units
   // are different physical lengths: frame-width measures need a (vw/vh) factor.
   const k = vw / vh;
-  const frac = Math.min(MAX_FRAC, Math.max(MIN_FRAC, TARGET_THUMB_PX / vw));
-  const w = frac * 100, h = w * ASPECT * k, ry = w * 0.62 * k;
+  const frac = Math.min(MAX_FRAC, Math.max(MIN_FRAC, targetPx / vw));
+  let w = frac * 100, h = w * ASPECT * k, ry = w * 0.62 * k;
+  // A tall outline can run off the top and bottom of the frame once it is
+  // wide; clamp the height and let the arch flatten rather than clip.
+  if(h > 96){ h = 96; ry = Math.min(ry, h * 0.42); }
   const x0 = 50 - w/2, x1 = 50 + w/2;
   const y0 = 50 - h/2, y1 = 50 + h/2, yArc = y0 + ry;
   const d = `M ${x0} ${y1} L ${x0} ${yArc} A ${w/2} ${ry} 0 0 1 ${x1} ${yArc} L ${x1} ${y1}`;
   $('silh').setAttribute('d', d);
   $('silh-mask').setAttribute('d', d + ' Z');
   box = {x0:x0/100, x1:x1/100, y0:y0/100, y1:y1/100};
-  $('meta').textContent = `${vw}x${vh} · outline ${Math.round(frac*vw)}px `
-    + `(${Math.round(frac*100)}%) · ridge ~${(frac*vw*0.023).toFixed(1)}px`
+  const px = Math.round(frac*vw);
+  $('sizelab').textContent = `outline ${px}px · ridge ~${(px*0.023).toFixed(1)}px`;
+  $('meta').textContent = `${vw}x${vh} · ${Math.round(frac*100)}% of frame`
     + (window.__focusCtl ? ` · focus ${window.__focusCtl}` : '');
 }
 
@@ -243,8 +253,11 @@ function setCheck(el, ok, text){
 function tick(){
   const m = analyse();
   if(m && !busy){
-    focusPeak = Math.max(m.focus, focusPeak * PEAK_DECAY);
-    const focusBar = Math.max(FOCUS_FLOOR, focusPeak * FOCUS_RATIO);
+    focusHist.push(m.focus);
+    if(focusHist.length > FOCUS_WIN) focusHist.shift();
+    let recent = 0;
+    for(const f of focusHist) if(f > recent) recent = f;
+    const focusBar = Math.max(FOCUS_FLOOR, recent * FOCUS_RATIO);
     // Gate on skin sharpness only. The background/skin ratio looked promising
     // but misfires: a capture that worked scored 1.61 while one that failed
     // scored 1.45, so it is shown as advice, never used to block.
@@ -252,23 +265,35 @@ function tick(){
     const focusOk = m.focus >= focusBar;
     const lightOk = m.luma>=MIN_LUMA && m.luma<=MAX_LUMA && m.clip<=MAX_CLIP;
     setCheck($('c-fill'), fillOk, Math.round(m.fill*100)+'%');
-    setCheck($('c-focus'), focusOk, m.focus.toFixed(1) + ' / ' + focusPeak.toFixed(0));
+    setCheck($('c-focus'), focusOk, m.focus.toFixed(1));
     setCheck($('c-light'), lightOk, Math.round(m.luma));
     const hasName = mode === 'identify' || !!$('name').value.trim();
     $('name').className = hasName ? '' : 'missing';
     const ready = fillOk && focusOk && lightOk && hasName;
+    // The shutter stays locked until the frame is usable — a bad photo enrolled
+    // is worse than no photo, because it pollutes the gallery silently. The
+    // gate is only legitimate because every check is now REACHABLE: focus is
+    // measured against the last 1.5 s, so holding still always satisfies it.
+    // Any future check added here must have the same property.
     $('shoot').disabled = !ready;
+    // Name the blocking check on the button itself, so the reason is visible
+    // without reading the status line.
     $('shoot').textContent = ready
-      ? (mode === 'enroll' ? 'Capture & enrol' : 'Identify') : 'Hold steady…';
+      ? (mode === 'enroll' ? 'Capture & enrol' : 'Identify')
+      : !hasName ? 'Enter a name first'
+      : !fillOk  ? 'Move closer'
+      : !focusOk ? 'Hold steady…'
+      : (m.clip > MAX_CLIP ? 'Too much glare' : 'Needs more light');
     if(!sticky){
-      say(!hasName ? 'Enter a name above to enable capture'
+      say(!hasName ? 'Enter a name above, then capture'
         : !fillOk  ? 'Move closer — fill the outline edge to edge'
         : !focusOk ? (m.bgSharper
-             ? 'Background is sharper than your thumb — hold it against a close '
-               + 'surface (desk, wall, your other palm) so the camera cannot '
-               + 'focus past it'
-             : 'Out of focus — rock the phone slowly nearer and further until '
-               + 'the number peaks')
+             ? 'Background looks sharper than your thumb — rest it on a desk or '
+               + 'your other palm so there is nothing far away for the camera '
+               + 'to lock onto.'
+             : 'Not sharp yet — rock the phone slowly nearer and further. If it '
+               + 'never sharpens, press Lens to try another camera (an ultrawide '
+               + 'focuses much closer), or – to shrink the outline.')
         : !lightOk ? (m.clip > MAX_CLIP ? 'Too much glare — angle away from the light'
                                         : 'Too dark — add light or use a lamp')
         : 'Looks good — hold still and capture',
@@ -295,7 +320,7 @@ async function nextCam(){
     sticky='1'; setTimeout(()=>{sticky='';}, 5000); return;
   }
   camIdx = (camIdx + 1) % cams.length;
-  focusPeak = 0;                       // new optics, recalibrate the focus bar
+  focusHist = [];                      // new optics, recalibrate the focus bar
   await start(cams[camIdx].deviceId);
   await listCams();
 }
@@ -427,7 +452,7 @@ async function capture(){
   }
   if(key) localStorage.setItem('fp_key', key);
   busy = true; sticky = '1';
-  $('shoot').disabled = true; $('force').disabled = true;
+  $('shoot').disabled = true;
   $('shoot').textContent = 'Working…';
   const H = {'X-API-Key': key};
   try{
@@ -492,13 +517,22 @@ async function capture(){
        : `<div><span class="big">✗ Error</span><span class="sub">${e.message}</span></div>`,
        'err');
   }finally{
-    busy = false; $('force').disabled = false;
+    busy = false;
     setTimeout(()=>{ sticky=''; }, 8000);
   }
 }
 
+function resize(mult){
+  targetPx = Math.round(Math.min(MAX_TARGET_PX,
+                Math.max(MIN_TARGET_PX, targetPx * mult)));
+  localStorage.setItem('fp_target', targetPx);
+  focusHist = [];        // different framing, different achievable sharpness
+  silhouettePath();
+}
+
 $('shoot').addEventListener('click', capture);
-$('force').addEventListener('click', capture);
+$('bigger').addEventListener('click', ()=>resize(1.18));
+$('smaller').addEventListener('click', ()=>resize(1/1.18));
 $('name').addEventListener('input', ()=>{ sticky=''; });
 document.querySelectorAll('.mode[data-mode]').forEach(b =>
   b.addEventListener('click', () => setMode(b.dataset.mode)));

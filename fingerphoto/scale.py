@@ -68,6 +68,65 @@ def _patch_period(
     return s / r_peak, ratio
 
 
+def _grid(gray: np.ndarray, grid: int):
+    """CLAHE'd copy plus the patch geometry shared by the estimators."""
+    g = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8)).apply(gray)
+    h, w = gray.shape
+    side = int(min(h, w) * 0.9)
+    y0, x0 = (h - side) // 2, (w - side) // 2
+    grid = max(1, min(grid, side // 48))  # small crops get a coarser grid
+    s = side // grid
+    s -= s % 2
+    if s < 32:
+        raise ValueError("image too small for grid period estimation")
+    return g, y0, x0, grid, s, side
+
+
+def ridge_evidence(
+    gray: np.ndarray,
+    min_period: float,
+    max_period: float,
+    grid: int = 6,
+) -> tuple[float, float]:
+    """Does this image contain ridge-frequency energy AT ALL?
+
+    Returns (fraction of grid patches with a convincing spectral peak, median
+    peak prominence). Measured on the RAW image, deliberately before Gabor
+    enhancement: the enhancer is an oriented band-pass filter, so fed a blurred
+    finger it still emits ridge-like texture and SourceAFIS finds plenty of
+    minutiae in the hallucination. A minutiae count therefore cannot tell a real
+    print from an invented one — this can.
+
+    NEGATIVE RESULT — do not gate on this without new evidence. The idea was
+    to reject captures with no real ridges before the enhancer invents some.
+    On three photos it looked decisive, but across the full fixture set every
+    summary statistic overlaps (fraction of patches >= 2.0, median, p75, mean,
+    mean of top 3), measured on finger-mask patches only:
+
+        matches      thumb_6172 0.73  thumb_6174 0.72  sister_6214 0.79
+                     thumb_6173 0.46  sister_6176 0.05  sister_6175 0.07
+        never match  QD 0.53  W 0.50  probes 0.16-0.22
+
+    sister_6176 (0.05) sits below every failed web capture, and QD (0.53) above
+    several photos that do match. So low spectral prominence in the raw crop
+    does not imply an unusable print, and high prominence does not imply a
+    usable one. Kept because the number is worth logging, and because the next
+    attempt should start from these measurements rather than repeat them.
+    """
+    try:
+        g, y0, x0, grid, s, _ = _grid(gray, grid)
+    except ValueError:
+        return 0.0, 0.0
+    ratios = []
+    for gy in range(grid):
+        for gx in range(grid):
+            patch = g[y0 + gy * s : y0 + (gy + 1) * s, x0 + gx * s : x0 + (gx + 1) * s]
+            res = _patch_period(patch, min_period, max_period)
+            ratios.append(res[1] if res is not None else 0.0)
+    r = np.array(ratios)
+    return float((r >= 2.0).mean()), float(np.median(r))
+
+
 def estimate_ridge_period(
     gray: np.ndarray,
     min_period: float = 4.0,
@@ -78,17 +137,7 @@ def estimate_ridge_period(
     patches. A single global FFT gets captured by creases/specular highlights;
     block-wise + median (Hong 1998 practice) lets good blocks outvote bad ones.
     Runs on a CLAHE'd copy so weak-ridge blocks still show a spectral peak."""
-    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-    g = clahe.apply(gray)
-
-    h, w = gray.shape
-    side = int(min(h, w) * 0.9)
-    y0, x0 = (h - side) // 2, (w - side) // 2
-    grid = max(1, min(grid, side // 48))  # small crops get a coarser grid
-    s = side // grid
-    s -= s % 2
-    if s < 32:
-        raise ValueError("image too small for grid period estimation")
+    g, y0, x0, grid, s, side = _grid(gray, grid)
 
     estimates: list[tuple[float, float]] = []
     for gy in range(grid):
