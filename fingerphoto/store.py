@@ -231,6 +231,21 @@ def templates_for_identity(identity_uuid: str, finger: str | None = None) -> lis
         con.close()
 
 
+def _save_probe(bgr: np.ndarray, outcome: str) -> None:
+    """Diagnostic: keep identify probes when FP_SAVE_PROBES is set. Off by
+    default — these are biometric images and identification is normally a
+    read-only operation. Invaluable while tuning capture, since a failed
+    probe is otherwise invisible."""
+    if os.environ.get("FP_SAVE_PROBES", "").lower() not in ("1", "true", "yes"):
+        return
+    import cv2
+
+    d = Path(os.environ.get("FP_DATA_DIR", ROOT / "data")) / "probes"
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    cv2.imwrite(str(d / f"{stamp}_{outcome}.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+
 def identify_bgr(
     bgr: np.ndarray,
     match_threshold: float | None = None,
@@ -243,11 +258,16 @@ def identify_bgr(
         gal = _decrypted_gallery(con)
         if not gal:
             raise StoreError(ReasonCode.GALLERY_EMPTY, "no identities enrolled")
-        probe = identity.photo_template_set(bgr, min_minutiae=min_minutiae())
+        try:
+            probe = identity.photo_template_set(bgr, min_minutiae=min_minutiae())
+        except AcquisitionError:
+            _save_probe(bgr, "acquire-failed")
+            raise
         scores = {u: identity.set_score(probe, ts) for u, (_, ts) in gal.items()}
         ranked = sorted(scores.items(), key=lambda kv: -kv[1])
         best_uuid, best_score = ranked[0]
         matched = best_score >= thr
+        _save_probe(bgr, f"{'match' if matched else 'nomatch'}-{best_score:.0f}")
         audit(con, "identify", best_uuid if matched else None, request_id,
               "match" if matched else "no_match")
         entry = lambda u, s: {"uuid": u, "name": gal[u][0], "score": round(s, 1)}
