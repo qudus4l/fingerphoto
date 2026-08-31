@@ -45,6 +45,9 @@
   button{width:100%;padding:14px;border-radius:10px;border:0;font-size:17px;
          font-weight:600;background:var(--accent);color:#08131f}
   button:disabled{background:#26303b;color:#5d6875}
+  button.secondary{background:transparent;color:var(--muted);
+                   border:1px solid var(--line);margin-top:7px;font-size:14px;
+                   font-weight:500;padding:11px}
   .sizer{display:flex;gap:6px;align-items:center;margin-top:8px;flex:0 0 auto}
   .sizer button{width:46px;padding:8px;font-size:20px;background:var(--panel);
                 color:var(--text);border:1px solid var(--line)}
@@ -103,6 +106,12 @@
 
   <div class="actions">
     <button id="shoot">Capture</button>
+    <!-- The live path is limited to what getUserMedia exposes: no tap-to-focus
+         and no automatic macro lens switch. Every photo in this project that
+         actually matches was taken with the phone's own Camera app, which has
+         both. So offer that route directly. -->
+    <button id="upload" class="secondary">Use a photo from the Camera app</button>
+    <input type="file" id="pick" accept="image/*" style="display:none">
   </div>
   <div id="meta"></div>
 
@@ -443,7 +452,9 @@ async function poll(jobId, H, label){
   }
 }
 
-async function capture(){
+// `source`, when given, supplies [blob, filename] instead of the live burst —
+// that is how a photo taken in the Camera app enters the same pipeline.
+async function capture(source){
   if(busy) return;
   const name = $('name').value.trim(), key = $('key').value.trim();
   if(mode === 'enroll' && !name){
@@ -452,16 +463,23 @@ async function capture(){
   }
   if(key) localStorage.setItem('fp_key', key);
   busy = true; sticky = '1';
-  $('shoot').disabled = true;
+  $('shoot').disabled = true; $('upload').disabled = true;
   $('shoot').textContent = 'Working…';
   const H = {'X-API-Key': key};
   try{
-    say('Capturing burst…');
-    const blob = await burst();
+    let blob, fname;
+    if(source){
+      lastShot = null;                    // no canvas to show back on failure
+      [blob, fname] = await source();
+      say(`Read ${(blob.size/1024)|0} KB from ${fname}…`);
+    }else{
+      say('Capturing burst…');
+      blob = await burst(); fname = 'capture.jpg';
+    }
     const fd = new FormData();
 
     if(mode === 'identify'){
-      fd.append('file', blob, 'probe.jpg');
+      fd.append('file', blob, fname);
       say(`Captured ${(blob.size/1024)|0} KB. Searching…`);
       const r = await fetch('/v1/identify', {method:'POST', headers:H, body:fd});
       if(r.status === 401) throw new Error('auth failed — check the API key');
@@ -496,7 +514,7 @@ async function capture(){
       throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
     }else{ uuid = (await r.json()).uuid; }
 
-    fd.append('files', blob, 'capture.jpg');
+    fd.append('files', blob, fname);
     fd.append('finger', 'right_thumb');
     say('Uploading…');
     r = await fetch(`/v1/identities/${uuid}/photos`, {method:'POST', headers:H, body:fd});
@@ -517,7 +535,7 @@ async function capture(){
        : `<div><span class="big">✗ Error</span><span class="sub">${e.message}</span></div>`,
        'err');
   }finally{
-    busy = false;
+    busy = false; $('upload').disabled = false;
     setTimeout(()=>{ sticky=''; }, 8000);
   }
 }
@@ -530,7 +548,13 @@ function resize(mult){
   silhouettePath();
 }
 
-$('shoot').addEventListener('click', capture);
+$('shoot').addEventListener('click', ()=>capture());
+$('upload').addEventListener('click', ()=>$('pick').click());
+$('pick').addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';              // so re-picking the same file still fires
+  if(f) capture(async () => [f, f.name || 'photo.jpg']);
+});
 $('bigger').addEventListener('click', ()=>resize(1.18));
 $('smaller').addEventListener('click', ()=>resize(1/1.18));
 $('name').addEventListener('input', ()=>{ sticky=''; });
