@@ -64,6 +64,7 @@
   <div class="modes">
     <button class="mode on" data-mode="enroll">Enroll</button>
     <button class="mode" data-mode="identify">Identify</button>
+    <button class="mode" id="lens" title="Switch camera">Lens ▸</button>
   </div>
   <div class="row">
     <input id="name" placeholder="Name" autocomplete="off" autocapitalize="words">
@@ -106,10 +107,20 @@
 // Verified against our own photos: thumb_6172 is 734 px wide, 15.2 px period.
 // The target is a pixel COUNT, so its share of the frame depends on the
 // stream resolution and is computed per device.
-const TARGET_THUMB_PX = 650;
+// 560px -> ~12.9px ridge period, still ~1.6x oversampled before the pipeline
+// rescales to 8px. Deliberately LOWER than the 650 first shipped: a phone's
+// main wide lens stops focusing around 10-15cm, and a web page cannot switch
+// to the ultrawide/macro camera the way the native app does. Evidence: a
+// guided capture at 26.3 px/mm focused and gave 100 minutiae, while one at
+// 30.2 px/mm (physically closer) could not focus and gave garbage. Asking for
+// a slightly smaller thumb keeps users where the lens still works.
+const TARGET_THUMB_PX = 560;
 // Only the WIDTH carries the scale; crop_distal finds the pad in the full
 // photo regardless, so height is pure ergonomics.
-const ASPECT = 1.45, MIN_FRAC = 0.22, MAX_FRAC = 0.72;
+// MIN_FRAC must stay below TARGET/(widest stream) or it silently overrides the
+// target on high-resolution sensors — at 3024px wide, a 0.22 floor demanded
+// 665px however small the target was set.
+const ASPECT = 1.45, MIN_FRAC = 0.16, MAX_FRAC = 0.72;
 const MIN_FILL = 0.55, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
 // Focus is judged RELATIVE to the sharpest frame this device has produced, not
 // against an absolute number. Measured values vary hugely by sensor and scene:
@@ -243,11 +254,38 @@ function tick(){
   requestAnimationFrame(tick);
 }
 
-async function start(){
+let cams = [], camIdx = 0, curStream = null;
+
+async function listCams(){
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:'environment'}, width:{ideal:2560}, height:{ideal:1440}}
-    });
+    cams = (await navigator.mediaDevices.enumerateDevices())
+             .filter(d => d.kind === 'videoinput');
+  }catch(e){ cams = []; }
+  $('lens').textContent = cams.length > 1 ? `Lens ${camIdx+1}/${cams.length}` : 'Lens';
+}
+
+async function nextCam(){
+  if(cams.length < 2) {
+    say('Only one camera exposed to the browser. An ultrawide/macro lens, if '
+      + 'the phone has one, may not be offered to web pages.', 'err');
+    sticky='1'; setTimeout(()=>{sticky='';}, 5000); return;
+  }
+  camIdx = (camIdx + 1) % cams.length;
+  focusPeak = 0;                       // new optics, recalibrate the focus bar
+  await start(cams[camIdx].deviceId);
+  await listCams();
+}
+
+async function start(deviceId){
+  try{
+    if(curStream) curStream.getTracks().forEach(t => t.stop());
+    // A phone's macro capability usually lives on a SEPARATE camera device, so
+    // enumerating and switching is the only way a web page can reach it.
+    const video_c = deviceId
+      ? {deviceId:{exact:deviceId}, width:{ideal:2560}, height:{ideal:1440}}
+      : {facingMode:{ideal:'environment'}, width:{ideal:2560}, height:{ideal:1440}};
+    const stream = await navigator.mediaDevices.getUserMedia({video: video_c});
+    curStream = stream;
     const track = stream.getVideoTracks()[0];
     let focusCtl = 'auto (no control)';
     try{
@@ -270,7 +308,8 @@ async function start(){
     window.__focusCtl = focusCtl;
     video.srcObject = stream;
     await video.play();
-    layout(); tick();
+    layout();
+    if(!window.__ticking){ window.__ticking = true; tick(); }  // one loop only
   }catch(e){
     say('Camera unavailable: ' + e.message
       + '\nCameras need HTTPS or localhost.', 'err');
@@ -437,14 +476,15 @@ async function capture(){
 $('shoot').addEventListener('click', capture);
 $('force').addEventListener('click', capture);
 $('name').addEventListener('input', ()=>{ sticky=''; });
-document.querySelectorAll('.mode').forEach(b =>
+document.querySelectorAll('.mode[data-mode]').forEach(b =>
   b.addEventListener('click', () => setMode(b.dataset.mode)));
+$('lens').addEventListener('click', nextCam);
 $('key').value = localStorage.getItem('fp_key') || '';   // survive reloads
 setMode('enroll');
 video.addEventListener('loadedmetadata', layout);
 addEventListener('resize', layout);
 addEventListener('orientationchange', ()=>setTimeout(layout, 300));
-start();
+start().then(listCams);
 </script>
 </body>
 </html>
