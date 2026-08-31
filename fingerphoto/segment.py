@@ -53,15 +53,23 @@ def skin_mask(bgr: np.ndarray) -> np.ndarray:
 
 
 def crop_distal(
-    bgr: np.ndarray, height_factor: float = 1.8
+    bgr: np.ndarray, height_factor: float = 1.8, mask: np.ndarray | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
     """Crop the fingertip pad, assuming the finger points roughly upward
-    (topmost skin = tip). Returns (BGR crop with background flattened, mask)."""
-    mask = skin_mask(bgr)
+    (topmost skin = tip). Returns (BGR crop with background flattened, mask).
+
+    `mask` overrides the color-based segmentation — pass a learned mask (see
+    localize_sam.find_finger) when the color gate is unreliable (dim scenes,
+    warm backgrounds)."""
+    if mask is None:
+        mask = skin_mask(bgr)
     rows = np.where(mask.any(axis=1))[0]
     y_top = int(rows.min())
 
-    # finger width: median blob width over the first stretch below the tip
+    # finger width: median blob width over the first stretch below the tip.
+    # 400 is empirically tuned; the closed-loop scale estimator downstream is
+    # sensitive enough that even 400->403 measurably shifts genuine scores,
+    # so do not "generalize" this constant without an A/B on real photos.
     probe_rows = mask[y_top : min(y_top + 400, mask.shape[0])]
     widths = probe_rows.sum(axis=1) / 255
     width = float(np.median(widths[widths > 0]))
