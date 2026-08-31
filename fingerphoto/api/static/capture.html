@@ -50,9 +50,21 @@
                    font-weight:500;padding:10px}
   #meta{font-size:11px;color:#5d6875;text-align:center;padding-bottom:6px;
         flex:0 0 auto;font-family:ui-monospace,Menlo,monospace}
+  .modes{display:flex;gap:6px;padding-top:10px;flex:0 0 auto}
+  .mode{flex:1;padding:9px;border-radius:8px;font-size:15px;font-weight:600;
+        background:var(--panel);color:var(--muted);border:1px solid var(--line)}
+  .mode.on{background:var(--accent);color:#08131f;border-color:var(--accent)}
+  #result{font-size:15px}
+  #result .big{font-size:26px;font-weight:700;letter-spacing:-.02em;
+               display:block;margin-bottom:2px}
+  #result .sub{font-size:13px;color:var(--muted);display:block}
 </style>
 </head>
 <body>
+  <div class="modes">
+    <button class="mode on" data-mode="enroll">Enroll</button>
+    <button class="mode" data-mode="identify">Identify</button>
+  </div>
   <div class="row">
     <input id="name" placeholder="Name" autocomplete="off" autocapitalize="words">
     <input id="key" placeholder="API key" type="password" autocomplete="off"
@@ -105,12 +117,28 @@ const $ = id => document.getElementById(id);
 const video = $('v'), stage = $('stage');
 const work = document.createElement('canvas');
 const wctx = work.getContext('2d', {willReadFrequently:true});
-let box = null, busy = false, sticky = '';
+let box = null, busy = false, sticky = '', mode = 'enroll';
 
 function say(msg, kind){          // status the tick loop will not clobber
   const el = $('status');
   el.textContent = msg;
   el.className = kind || '';
+}
+
+function show(html, kind){        // rich result (identify verdict)
+  const el = $('status');
+  el.innerHTML = html;
+  el.className = kind || '';
+}
+
+function setMode(m){
+  mode = m;
+  document.querySelectorAll('.mode').forEach(b =>
+    b.classList.toggle('on', b.dataset.mode === m));
+  $('name').style.display = (m === 'enroll') ? '' : 'none';
+  $('key').style.flex = (m === 'enroll') ? '0 0 42%' : '1';
+  $('shoot').textContent = 'Hold steady…';
+  sticky = '';
 }
 
 function layout(){
@@ -186,11 +214,12 @@ function tick(){
     setCheck($('c-fill'), fillOk, Math.round(m.fill*100)+'%');
     setCheck($('c-focus'), focusOk, m.focus.toFixed(0));
     setCheck($('c-light'), lightOk, Math.round(m.luma));
-    const hasName = !!$('name').value.trim();
+    const hasName = mode === 'identify' || !!$('name').value.trim();
     $('name').className = hasName ? '' : 'missing';
     const ready = fillOk && focusOk && lightOk && hasName;
     $('shoot').disabled = !ready;
-    $('shoot').textContent = ready ? 'Capture' : 'Hold steady…';
+    $('shoot').textContent = ready
+      ? (mode === 'enroll' ? 'Capture & enrol' : 'Identify') : 'Hold steady…';
     if(!sticky){
       say(!hasName ? 'Enter a name above to enable capture'
         : !fillOk  ? 'Move closer — fill the outline edge to edge'
@@ -242,19 +271,56 @@ async function burst(){
   return new Promise(res => shots[0].c.toBlob(b=>res(b), 'image/jpeg', 0.95));
 }
 
+async function poll(jobId, H, label){
+  for(let i=0;;i++){
+    await new Promise(r=>setTimeout(r, 2500));
+    const j = await (await fetch(`/v1/jobs/${jobId}`, {headers:H})).json();
+    if(j.status === 'succeeded') return j.result;
+    if(j.status === 'failed')
+      throw new Error(j.error?.detail || j.error?.reason_code || 'job failed');
+    say(`${label}… ${(i*2.5+2.5)|0}s (takes 10–60s)`);
+  }
+}
+
 async function capture(){
   if(busy) return;
   const name = $('name').value.trim(), key = $('key').value.trim();
-  if(!name){ sticky='1'; say('Enter a name first, then capture.', 'err');
-             setTimeout(()=>{sticky='';}, 2500); return; }
+  if(mode === 'enroll' && !name){
+    sticky='1'; say('Enter a name first, then capture.', 'err');
+    setTimeout(()=>{sticky='';}, 2500); return;
+  }
+  if(key) localStorage.setItem('fp_key', key);
   busy = true; sticky = '1';
   $('shoot').disabled = true; $('force').disabled = true;
   $('shoot').textContent = 'Working…';
+  const H = {'X-API-Key': key};
   try{
     say('Capturing burst…');
     const blob = await burst();
-    say(`Captured ${(blob.size/1024).toFixed(0)} KB. Creating identity…`);
-    const H = {'X-API-Key': key};
+    const fd = new FormData();
+
+    if(mode === 'identify'){
+      fd.append('file', blob, 'probe.jpg');
+      say(`Captured ${(blob.size/1024)|0} KB. Searching…`);
+      const r = await fetch('/v1/identify', {method:'POST', headers:H, body:fd});
+      if(r.status === 401) throw new Error('auth failed — check the API key');
+      if(!r.ok) throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
+      const res = await poll((await r.json()).job_id, H, 'Matching');
+      const runner = res.scores[1];
+      const sub = (runner ? `next closest ${runner.name} at ${runner.score}` : 'only one enrolled')
+                  + ` · threshold ${res.threshold}`;
+      if(res.match)
+        show(`<div><span class="big">✓ ${res.match.name}</span>`
+           + `<span class="sub">score ${res.match.score} — ${sub}</span></div>`, 'good');
+      else
+        show(`<div><span class="big">No match</span><span class="sub">`
+           + `closest ${res.best_candidate.name} at ${res.best_candidate.score}, `
+           + `below threshold ${res.threshold}</span></div>`, 'err');
+      return;
+    }
+
+    // enroll
+    say(`Captured ${(blob.size/1024)|0} KB. Creating identity…`);
     let uuid, r = await fetch('/v1/identities', {
       method:'POST', headers:{...H,'Content-Type':'application/json'},
       body: JSON.stringify({name, consent:true})});
@@ -269,42 +335,38 @@ async function capture(){
       throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
     }else{ uuid = (await r.json()).uuid; }
 
-    const fd = new FormData();
     fd.append('files', blob, 'capture.jpg');
     fd.append('finger', 'right_thumb');
     say('Uploading…');
     r = await fetch(`/v1/identities/${uuid}/photos`, {method:'POST', headers:H, body:fd});
     if(!r.ok) throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
-    const {job_id} = await r.json();
-
-    for(let i=0;;i++){
-      await new Promise(r=>setTimeout(r, 2500));
-      const j = await (await fetch(`/v1/jobs/${job_id}`, {headers:H})).json();
-      if(j.status === 'succeeded'){
-        const p = j.result.results[0];
-        say(p.status === 'enrolled'
-          ? `✓ Enrolled — ${p.templates} templates, ${p.minutiae} minutiae.\n`
-            + `Capture 2–3 shots per person.`
-          : `✗ Rejected: ${p.reason_code}\n${p.detail}`,
-          p.status === 'enrolled' ? 'good' : 'err');
-        break;
-      }
-      if(j.status === 'failed'){
-        say('✗ Failed: ' + (j.error?.reason_code||'unknown'), 'err'); break;
-      }
-      say(`Extracting template… ${i*2.5+2.5|0}s (takes 10–60s)`);
-    }
+    const res = await poll((await r.json()).job_id, H, 'Extracting template');
+    const p = res.results[0];
+    if(p.status !== 'enrolled')
+      { show(`<div><span class="big">✗ Rejected</span><span class="sub">`
+           + `${p.reason_code} — ${p.detail}</span></div>`, 'err'); return; }
+    const info = await (await fetch(`/v1/identities/${uuid}`, {headers:H})).json();
+    show(`<div><span class="big">✓ ${name} — ${info.photos} photo`
+       + `${info.photos===1?'':'s'}</span><span class="sub">`
+       + `${p.templates} templates, ${p.minutiae} minutiae this shot · `
+       + `${info.templates} total. ${info.photos < 3
+            ? 'Capture ' + (3-info.photos) + ' more for a solid identity.'
+            : 'Ready — switch to Identify.'}</span></div>`, 'good');
   }catch(e){
-    say('✗ ' + e.message, 'err');
+    show(`<div><span class="big">✗ Error</span><span class="sub">${e.message}</span></div>`, 'err');
   }finally{
     busy = false; $('force').disabled = false;
-    setTimeout(()=>{ sticky=''; }, 6000);
+    setTimeout(()=>{ sticky=''; }, 8000);
   }
 }
 
 $('shoot').addEventListener('click', capture);
 $('force').addEventListener('click', capture);
 $('name').addEventListener('input', ()=>{ sticky=''; });
+document.querySelectorAll('.mode').forEach(b =>
+  b.addEventListener('click', () => setMode(b.dataset.mode)));
+$('key').value = localStorage.getItem('fp_key') || '';   // survive reloads
+setMode('enroll');
 video.addEventListener('loadedmetadata', layout);
 addEventListener('resize', layout);
 addEventListener('orientationchange', ()=>setTimeout(layout, 300));
