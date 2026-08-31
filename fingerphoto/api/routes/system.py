@@ -20,8 +20,15 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 async def capture_page():
     """Guided capture UI. Unauthenticated because it is just a static page —
     the API key is entered in the form and travels on the XHRs it makes.
-    Note: browsers only grant camera access over HTTPS or localhost."""
-    return FileResponse(STATIC / "capture.html", media_type="text/html")
+    Note: browsers only grant camera access over HTTPS or localhost.
+
+    Sent no-store: mobile Safari otherwise serves a stale copy for a long
+    time, which silently hides UI fixes during tuning."""
+    return FileResponse(
+        STATIC / "capture.html",
+        media_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"},
+    )
 
 
 @public_router.get("/healthz")
