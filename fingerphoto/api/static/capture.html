@@ -110,14 +110,20 @@ const TARGET_THUMB_PX = 650;
 // Only the WIDTH carries the scale; crop_distal finds the pad in the full
 // photo regardless, so height is pure ergonomics.
 const ASPECT = 1.45, MIN_FRAC = 0.22, MAX_FRAC = 0.72;
-const MIN_FILL = 0.55, MIN_FOCUS = 12, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
+const MIN_FILL = 0.55, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
+// Focus is judged RELATIVE to the sharpest frame this device has produced, not
+// against an absolute number. Measured values vary hugely by sensor and scene:
+// a good hand-held photo scored 16.6 while a good guided capture scored 5.7 and
+// a blurred one 3.2 — no fixed threshold separates those. The peak decays so
+// the bar falls if you move somewhere darker.
+const FOCUS_FLOOR = 3.5, FOCUS_RATIO = 0.65, PEAK_DECAY = 0.997;
 const BURST = 5, BURST_MS = 110;
 
 const $ = id => document.getElementById(id);
 const video = $('v'), stage = $('stage');
 const work = document.createElement('canvas');
 const wctx = work.getContext('2d', {willReadFrequently:true});
-let box = null, busy = false, sticky = '', mode = 'enroll';
+let box = null, busy = false, sticky = '', mode = 'enroll', focusPeak = 0;
 
 function say(msg, kind){          // status the tick loop will not clobber
   const el = $('status');
@@ -170,7 +176,8 @@ function silhouettePath(){
   $('silh-mask').setAttribute('d', d + ' Z');
   box = {x0:x0/100, x1:x1/100, y0:y0/100, y1:y1/100};
   $('meta').textContent = `${vw}x${vh} · outline ${Math.round(frac*vw)}px `
-    + `(${Math.round(frac*100)}%) · ridge ~${(frac*vw*0.023).toFixed(1)}px`;
+    + `(${Math.round(frac*100)}%) · ridge ~${(frac*vw*0.023).toFixed(1)}px`
+    + (window.__focusCtl ? ` · focus ${window.__focusCtl}` : '');
 }
 
 function analyse(){
@@ -209,10 +216,12 @@ function setCheck(el, ok, text){
 function tick(){
   const m = analyse();
   if(m && !busy){
-    const fillOk = m.fill >= MIN_FILL, focusOk = m.focus >= MIN_FOCUS;
+    focusPeak = Math.max(m.focus, focusPeak * PEAK_DECAY);
+    const focusBar = Math.max(FOCUS_FLOOR, focusPeak * FOCUS_RATIO);
+    const fillOk = m.fill >= MIN_FILL, focusOk = m.focus >= focusBar;
     const lightOk = m.luma>=MIN_LUMA && m.luma<=MAX_LUMA && m.clip<=MAX_CLIP;
     setCheck($('c-fill'), fillOk, Math.round(m.fill*100)+'%');
-    setCheck($('c-focus'), focusOk, m.focus.toFixed(0));
+    setCheck($('c-focus'), focusOk, m.focus.toFixed(1) + ' / ' + focusPeak.toFixed(0));
     setCheck($('c-light'), lightOk, Math.round(m.luma));
     const hasName = mode === 'identify' || !!$('name').value.trim();
     $('name').className = hasName ? '' : 'missing';
@@ -223,7 +232,8 @@ function tick(){
     if(!sticky){
       say(!hasName ? 'Enter a name above to enable capture'
         : !fillOk  ? 'Move closer — fill the outline edge to edge'
-        : !focusOk ? 'Tap the screen on your thumb to focus'
+        : !focusOk ? 'Out of focus — rock the phone slowly nearer and further '
+                     + 'until the number peaks'
         : !lightOk ? (m.clip > MAX_CLIP ? 'Too much glare — angle away from the light'
                                         : 'Too dark — add light or use a lamp')
         : 'Looks good — hold still and capture',
@@ -239,12 +249,25 @@ async function start(){
       video:{facingMode:{ideal:'environment'}, width:{ideal:2560}, height:{ideal:1440}}
     });
     const track = stream.getVideoTracks()[0];
+    let focusCtl = 'auto (no control)';
     try{
       const caps = track.getCapabilities ? track.getCapabilities() : null;
       if(caps && caps.width && caps.width.max > (track.getSettings().width||0))
         await track.applyConstraints({width:{ideal:caps.width.max},
                                       height:{ideal:caps.height.max}});
-    }catch(e){}
+      // There is no tap-to-focus in a web page. Some browsers expose focusMode
+      // and pointsOfInterest through MediaTrack constraints; Safari does not.
+      // Try, and report honestly what we got.
+      if(caps && caps.focusMode && caps.focusMode.includes('continuous')){
+        await track.applyConstraints({advanced:[{focusMode:'continuous'}]});
+        focusCtl = 'continuous';
+      }
+      if(caps && caps.pointsOfInterest){
+        await track.applyConstraints({advanced:[{pointsOfInterest:[{x:0.5,y:0.5}]}]});
+        focusCtl += ' + centre POI';
+      }
+    }catch(e){ focusCtl = 'auto (constraint rejected)'; }
+    window.__focusCtl = focusCtl;
     video.srcObject = stream;
     await video.play();
     layout(); tick();
