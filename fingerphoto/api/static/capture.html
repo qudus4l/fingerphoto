@@ -261,14 +261,62 @@ function grabFrame(){
   return c;
 }
 
+function focusOf(canvas){
+  // Measure sharpness ON THE CAPTURED FRAME. The live analyse() reads whatever
+  // the video shows at call time, which is not necessarily the frame we just
+  // grabbed — scoring the wrong frame meant "keep the sharpest" could keep a
+  // blurry one.
+  const W = 200, H = Math.round(W * canvas.height / canvas.width);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const cx = c.getContext('2d', {willReadFrequently:true});
+  cx.drawImage(canvas, 0, 0, W, H);
+  // sample the middle, where the fingertip is
+  const x0 = (W*0.25)|0, y0 = (H*0.15)|0, w = (W*0.5)|0, h = (H*0.5)|0;
+  const d = cx.getImageData(x0, y0, w, h).data;
+  const g = new Float32Array(w*h);
+  for(let i=0,p=0; p<d.length; p+=4, i++)
+    g[i] = 0.299*d[p] + 0.587*d[p+1] + 0.114*d[p+2];
+  let lap=0, n=0;
+  for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){
+    const i=y*w+x;
+    lap += Math.abs(4*g[i]-g[i-1]-g[i+1]-g[i-w]-g[i+w]); n++;
+  }
+  return n ? lap/n : 0;
+}
+
+let lastShot = null;   // kept so a failure can be shown back to the user
+
 async function burst(){
   const shots = [];
   for(let i=0;i<BURST;i++){
-    shots.push({c: grabFrame(), f: (analyse()||{focus:0}).focus});
+    const c = grabFrame();
+    shots.push({c, f: focusOf(c)});
+    say(`Capturing burst… ${i+1}/${BURST}`);
     await new Promise(r => setTimeout(r, BURST_MS));
   }
   shots.sort((a,b)=>b.f-a.f);
+  lastShot = shots[0];
   return new Promise(res => shots[0].c.toBlob(b=>res(b), 'image/jpeg', 0.95));
+}
+
+const FRIENDLY = {
+  QUALITY_TOO_LOW: 'Ridges too faint to read. Get closer, tap to focus, and '
+    + 'add light — avoid glare straight off the skin.',
+  NO_FINGER_FOUND: 'Could not find a fingertip. Fill the outline with just '
+    + 'your thumb, plain background behind it.',
+  GALLERY_EMPTY: 'Nobody is enrolled yet — enrol first.',
+  UNREADABLE_IMAGE: 'The capture did not decode. Try again.',
+  IMAGE_TOO_LARGE: 'Image too large for the server limit.',
+};
+
+function failureCard(code, detail){
+  const tip = FRIENDLY[code] || detail || 'Unknown error';
+  const thumb = lastShot
+    ? `<img src="${lastShot.c.toDataURL('image/jpeg',0.5)}" style="width:56px;
+         height:56px;object-fit:cover;border-radius:6px;flex:0 0 auto">` : '';
+  return `<div style="display:flex;gap:10px;align-items:center">${thumb}`
+    + `<div><span class="big">✗ ${code === 'QUALITY_TOO_LOW' ? 'Too blurry' : 'Failed'}`
+    + `</span><span class="sub">${tip}</span></div></div>`;
 }
 
 async function poll(jobId, H, label){
@@ -276,8 +324,10 @@ async function poll(jobId, H, label){
     await new Promise(r=>setTimeout(r, 2500));
     const j = await (await fetch(`/v1/jobs/${jobId}`, {headers:H})).json();
     if(j.status === 'succeeded') return j.result;
-    if(j.status === 'failed')
-      throw new Error(j.error?.detail || j.error?.reason_code || 'job failed');
+    if(j.status === 'failed'){
+      const e = new Error(j.error?.detail || 'job failed');
+      e.code = j.error?.reason_code; throw e;
+    }
     say(`${label}… ${(i*2.5+2.5)|0}s (takes 10–60s)`);
   }
 }
@@ -343,8 +393,7 @@ async function capture(){
     const res = await poll((await r.json()).job_id, H, 'Extracting template');
     const p = res.results[0];
     if(p.status !== 'enrolled')
-      { show(`<div><span class="big">✗ Rejected</span><span class="sub">`
-           + `${p.reason_code} — ${p.detail}</span></div>`, 'err'); return; }
+      { show(failureCard(p.reason_code, p.detail), 'err'); return; }
     const info = await (await fetch(`/v1/identities/${uuid}`, {headers:H})).json();
     show(`<div><span class="big">✓ ${name} — ${info.photos} photo`
        + `${info.photos===1?'':'s'}</span><span class="sub">`
@@ -353,7 +402,9 @@ async function capture(){
             ? 'Capture ' + (3-info.photos) + ' more for a solid identity.'
             : 'Ready — switch to Identify.'}</span></div>`, 'good');
   }catch(e){
-    show(`<div><span class="big">✗ Error</span><span class="sub">${e.message}</span></div>`, 'err');
+    show(e.code ? failureCard(e.code, e.message)
+       : `<div><span class="big">✗ Error</span><span class="sub">${e.message}</span></div>`,
+       'err');
   }finally{
     busy = false; $('force').disabled = false;
     setTimeout(()=>{ sticky=''; }, 8000);
