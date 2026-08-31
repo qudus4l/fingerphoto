@@ -98,8 +98,13 @@
 //
 // The target is a pixel COUNT, so its share of the frame depends on capture
 // resolution — 700/1080 = 65%, but 700/2268 = 31%. Compute it per device.
-const TARGET_THUMB_PX = 700, ASPECT = 1.8;
-const MIN_FRAC = 0.22, MAX_FRAC = 0.85;  // keep the outline usable on any sensor
+const TARGET_THUMB_PX = 650;
+// Only the WIDTH carries the scale; crop_distal locates the pad in the full
+// photo regardless, so the height is pure ergonomics. 1.45 spans tip to first
+// crease (the pad) and leaves margin — at 1.8 on a 1080-wide phone stream the
+// outline wanted ~88% of frame height and clipped the fingertip.
+const ASPECT = 1.45;
+const MIN_FRAC = 0.22, MAX_FRAC = 0.72;  // keep the outline usable on any sensor
 
 // Thresholds — tune on a real device; the server's minutiae gate is authoritative.
 const MIN_FILL = 0.55, MIN_FOCUS = 12, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
@@ -192,14 +197,29 @@ function tick(){
 
 async function start(){
   try{
+    // Ask for as many pixels as the device will give: more resolution means a
+    // smaller outline fraction, which means more framing margin for the user.
     stream = await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080}}
+      video:{facingMode:{ideal:'environment'},
+             width:{ideal:2560}, height:{ideal:1440}}
     });
+    const track = stream.getVideoTracks()[0];
+    try{  // push to the sensor's max if the browser exposes it
+      const caps = track.getCapabilities ? track.getCapabilities() : null;
+      if(caps && caps.width && caps.width.max > (track.getSettings().width||0)){
+        await track.applyConstraints({width:{ideal:caps.width.max},
+                                      height:{ideal:caps.height.max}});
+      }
+    }catch(e){ /* not supported; the ideal above still applies */ }
     video.srcObject = stream;
     await video.play();
     // match the stage box to the real frame aspect so overlay % == frame %
     $('stage').style.aspectRatio = video.videoWidth + ' / ' + video.videoHeight;
     silhouettePath();
+    const frac = Math.min(MAX_FRAC, Math.max(MIN_FRAC, TARGET_THUMB_PX/video.videoWidth));
+    log.textContent = `stream ${video.videoWidth}x${video.videoHeight} · outline `
+      + `${Math.round(frac*100)}% of width (${Math.round(frac*video.videoWidth)}px) · `
+      + `predicted ridge period ${(frac*video.videoWidth*0.023).toFixed(1)}px`;
     tick();
   }catch(e){
     $('hint').textContent = 'Camera unavailable: ' + e.message;
