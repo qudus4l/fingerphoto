@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fingerphoto Capture</title>
+<style>
+  :root{
+    --bg:#0d1013; --panel:#161b21; --line:#232b34; --text:#e8edf2;
+    --muted:#8b97a5; --ok:#3ddc97; --warn:#f5b642; --bad:#ef5f6b; --accent:#5aa9ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  header{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;
+         align-items:baseline;gap:10px}
+  header h1{margin:0;font-size:16px;font-weight:600;letter-spacing:-.01em}
+  header span{color:var(--muted);font-size:13px}
+  main{max-width:560px;margin:0 auto;padding:16px}
+  #stage{position:relative;width:100%;background:#000;border-radius:12px;
+         overflow:hidden;border:1px solid var(--line)}
+  video{display:block;width:100%;height:100%;object-fit:cover}
+  #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .checks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
+  .check{background:var(--panel);border:1px solid var(--line);border-radius:9px;
+         padding:9px 10px}
+  .check .label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+                color:var(--muted)}
+  .check .val{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;
+              margin-top:2px}
+  .check.pass{border-color:rgba(61,220,151,.45)} .check.pass .val{color:var(--ok)}
+  .check.fail .val{color:var(--bad)}
+  .bar{height:3px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .1s}
+  #hint{min-height:22px;color:var(--muted);font-size:14px;text-align:center;margin:6px 0}
+  button{width:100%;padding:14px;border-radius:10px;border:0;font-size:16px;
+         font-weight:600;background:var(--accent);color:#08131f;cursor:pointer}
+  button:disabled{background:#26303b;color:#5d6875;cursor:not-allowed}
+  button.secondary{background:transparent;color:var(--muted);
+                   border:1px solid var(--line);margin-top:8px;font-weight:500}
+  .row{display:flex;gap:8px;margin-bottom:10px}
+  input{flex:1;padding:10px;border-radius:8px;border:1px solid var(--line);
+        background:var(--panel);color:var(--text);font-size:14px}
+  #log{margin-top:14px;font-size:13px;color:var(--muted);white-space:pre-wrap;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.5}
+  .tip{background:var(--panel);border:1px solid var(--line);border-radius:9px;
+       padding:10px 12px;font-size:13px;color:var(--muted);margin-top:12px}
+</style>
+</head>
+<body>
+<header><h1>Fingerphoto Capture</h1><span>thumb, pad to camera</span></header>
+<main>
+  <div class="row">
+    <input id="name" placeholder="Name (new identity)" autocomplete="off">
+    <input id="key" placeholder="API key" type="password" autocomplete="off" style="flex:0 0 40%">
+  </div>
+
+  <div id="stage">
+    <video id="v" playsinline muted autoplay></video>
+    <svg id="overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <defs><mask id="cut">
+        <rect width="100" height="100" fill="#fff"/>
+        <path id="silh-mask" fill="#000"/>
+      </mask></defs>
+      <rect width="100" height="100" fill="rgba(0,0,0,.55)" mask="url(#cut)"/>
+      <path id="silh" fill="none" stroke="#5aa9ff" stroke-width=".5"
+            vector-effect="non-scaling-stroke"/>
+    </svg>
+  </div>
+
+  <div class="checks">
+    <div class="check" id="c-fill"><div class="label">Fill</div><div class="val">–</div>
+      <div class="bar"><i></i></div></div>
+    <div class="check" id="c-focus"><div class="label">Focus</div><div class="val">–</div>
+      <div class="bar"><i></i></div></div>
+    <div class="check" id="c-light"><div class="label">Light</div><div class="val">–</div>
+      <div class="bar"><i></i></div></div>
+  </div>
+
+  <div id="hint">Starting camera…</div>
+  <button id="shoot" disabled>Hold steady…</button>
+  <button id="force" class="secondary">Capture anyway (override checks)</button>
+  <div class="tip"><b>Why the outline:</b> filling it puts your thumb at roughly
+    32 px per millimetre, so ridges land near 15 px apart — the scale the matcher
+    needs. Fill it edge to edge, pad square to the lens, and let it focus.</div>
+  <div id="log"></div>
+</main>
+
+<script>
+// --- Geometry, derived from physical measurements -------------------------
+// Ridge-to-ridge spacing averages 0.46 mm and an adult thumb is ~20 mm wide,
+// so a thumb N pixels wide yields a ridge period of ~N*0.023 px. We want ~16 px
+// per ridge in the capture (the pipeline rescales to 8, so ~2x oversampled —
+// headroom matters more than economy here), which needs the thumb ~700 px wide.
+// Verified against our own photos: thumb_6172 measures 734 px wide with a
+// 15.2 px ridge period, i.e. the same relationship.
+//
+// The target is a pixel COUNT, so its share of the frame depends on capture
+// resolution — 700/1080 = 65%, but 700/2268 = 31%. Compute it per device.
+const TARGET_THUMB_PX = 700, ASPECT = 1.8;
+const MIN_FRAC = 0.22, MAX_FRAC = 0.85;  // keep the outline usable on any sensor
+
+// Thresholds — tune on a real device; the server's minutiae gate is authoritative.
+const MIN_FILL = 0.55, MIN_FOCUS = 12, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
+const BURST = 5, BURST_MS = 110;
+
+const $ = id => document.getElementById(id);
+const video = $('v'), log = $('log');
+const work = document.createElement('canvas'), wctx = work.getContext('2d', {willReadFrequently:true});
+let stream = null, box = null, latest = null, busy = false;
+
+function silhouettePath(){
+  // Outline in the SVG's 0..100 square, mapped to the video's real aspect.
+  const vw = video.videoWidth || 3, vh = video.videoHeight || 4;
+  // The viewBox is a 0..100 square stretched over the frame, so X and Y units
+  // are NOT the same physical length: anything measured in frame-widths must
+  // be multiplied by (vw/vh) to be expressed in frame-heights.
+  const k = vw / vh;
+  const frac = Math.min(MAX_FRAC, Math.max(MIN_FRAC, TARGET_THUMB_PX / vw));
+  const w = frac * 100;                    // outline width, % of frame width
+  const h = w * ASPECT * k;                // outline height, % of frame height
+  const ry = w * 0.62 * k;                 // tip dome depth (0.62w, a little
+                                           // deeper than a semicircle)
+  const x0 = 50 - w/2, x1 = 50 + w/2;
+  const y0 = 50 - h/2, y1 = 50 + h/2, yArc = y0 + ry;
+  // up the left side, elliptical dome over the tip, down the right side
+  const d = `M ${x0} ${y1} L ${x0} ${yArc} A ${w/2} ${ry} 0 0 1 ${x1} ${yArc} L ${x1} ${y1}`;
+  $('silh').setAttribute('d', d);
+  $('silh-mask').setAttribute('d', d + ' Z');
+  box = {x0:x0/100, x1:x1/100, y0:(50-h/2)/100, y1:y1/100};
+}
+
+function analyse(){
+  if(!video.videoWidth || !box) return null;
+  const W = 160, H = Math.round(W * video.videoHeight / video.videoWidth);
+  work.width = W; work.height = H;
+  wctx.drawImage(video, 0, 0, W, H);
+  const px0 = Math.max(0, Math.floor(box.x0*W)), px1 = Math.min(W, Math.ceil(box.x1*W));
+  const py0 = Math.max(0, Math.floor(box.y0*H)), py1 = Math.min(H, Math.ceil(box.y1*H));
+  if(px1 <= px0+2 || py1 <= py0+2) return null;
+  const d = wctx.getImageData(px0, py0, px1-px0, py1-py0).data;
+  const w = px1-px0, h = py1-py0;
+  let skin=0, lum=0, clipped=0, n=0;
+  const gray = new Float32Array(w*h);
+  for(let i=0, p=0; p<d.length; p+=4, i++){
+    const r=d[p], g=d[p+1], b=d[p+2];
+    const y = 0.299*r + 0.587*g + 0.114*b;
+    gray[i] = y; lum += y; n++;
+    if(y > 250) clipped++;
+    // Cr from YCrCb, same gate the backend uses for skin
+    const cr = 0.5*r - 0.419*g - 0.081*b + 128;
+    if(cr > 135 && cr < 185 && r > g && r > b) skin++;
+  }
+  // focus: mean |Laplacian| inside the outline
+  let lap = 0, ln = 0;
+  for(let y=1; y<h-1; y++) for(let x=1; x<w-1; x++){
+    const i = y*w+x;
+    lap += Math.abs(4*gray[i] - gray[i-1] - gray[i+1] - gray[i-w] - gray[i+w]); ln++;
+  }
+  return {fill: skin/n, focus: ln ? lap/ln : 0, luma: lum/n, clip: clipped/n};
+}
+
+function setCheck(el, ok, text, frac){
+  el.className = 'check ' + (ok ? 'pass' : 'fail');
+  el.querySelector('.val').textContent = text;
+  el.querySelector('.bar i').style.width = Math.max(0, Math.min(1, frac))*100 + '%';
+}
+
+function tick(){
+  const m = analyse();
+  if(m){
+    latest = m;
+    const fillOk = m.fill >= MIN_FILL;
+    const focusOk = m.focus >= MIN_FOCUS;
+    const lightOk = m.luma >= MIN_LUMA && m.luma <= MAX_LUMA && m.clip <= MAX_CLIP;
+    setCheck($('c-fill'), fillOk, Math.round(m.fill*100)+'%', m.fill/MIN_FILL);
+    setCheck($('c-focus'), focusOk, m.focus.toFixed(0), m.focus/(MIN_FOCUS*2));
+    setCheck($('c-light'), lightOk, Math.round(m.luma), m.luma/255);
+    const ready = fillOk && focusOk && lightOk;
+    $('shoot').disabled = busy || !ready;
+    $('shoot').textContent = busy ? 'Working…' : (ready ? 'Capture' : 'Hold steady…');
+    $('hint').textContent = busy ? '' :
+      !fillOk  ? 'Move closer — fill the outline edge to edge' :
+      !focusOk ? 'Tap the screen on your thumb to focus' :
+      !lightOk ? (m.clip > MAX_CLIP ? 'Too much glare — angle away from the light'
+                                    : 'Too dark — add light or turn on the flash') :
+      'Looks good — hold still and capture';
+  }
+  requestAnimationFrame(tick);
+}
+
+async function start(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080}}
+    });
+    video.srcObject = stream;
+    await video.play();
+    // match the stage box to the real frame aspect so overlay % == frame %
+    $('stage').style.aspectRatio = video.videoWidth + ' / ' + video.videoHeight;
+    silhouettePath();
+    tick();
+  }catch(e){
+    $('hint').textContent = 'Camera unavailable: ' + e.message;
+    log.textContent = 'Cameras need HTTPS or localhost. Over a LAN IP the browser '
+      + 'blocks getUserMedia — use a tunnel (e.g. cloudflared/ngrok) or localhost.';
+  }
+}
+
+function grabFrame(){
+  const c = document.createElement('canvas');
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext('2d').drawImage(video, 0, 0);
+  return c;
+}
+
+async function burst(){
+  // Several frames, keep the sharpest — handheld shake means one is best.
+  const shots = [];
+  for(let i=0; i<BURST; i++){
+    shots.push({canvas: grabFrame(), focus: (analyse()||{focus:0}).focus});
+    await new Promise(r => setTimeout(r, BURST_MS));
+  }
+  shots.sort((a,b) => b.focus - a.focus);
+  return new Promise(res => shots[0].canvas.toBlob(b => res(b), 'image/jpeg', 0.95));
+}
+
+async function capture(){
+  const name = $('name').value.trim(), key = $('key').value.trim();
+  if(!name){ $('hint').textContent = 'Enter a name first'; return; }
+  busy = true; $('shoot').disabled = true; log.textContent = 'Capturing burst…';
+  try{
+    const blob = await burst();
+    const H = {'X-API-Key': key};
+    log.textContent = 'Creating identity…';
+    let r = await fetch('/v1/identities', {method:'POST', headers:{...H,'Content-Type':'application/json'},
+      body: JSON.stringify({name, consent:true})});
+    let uuid;
+    if(r.status === 409){
+      const all = await (await fetch('/v1/identities', {headers:H})).json();
+      uuid = all.find(i => i.name === name).uuid;
+      log.textContent = 'Adding to existing identity…';
+    } else if(!r.ok){
+      throw new Error((await r.json()).detail || r.status);
+    } else { uuid = (await r.json()).uuid; }
+
+    const fd = new FormData();
+    fd.append('files', blob, 'capture.jpg');
+    fd.append('finger', 'right_thumb');
+    r = await fetch(`/v1/identities/${uuid}/photos`, {method:'POST', headers:H, body:fd});
+    if(!r.ok) throw new Error((await r.json()).detail || r.status);
+    const {job_id} = await r.json();
+    log.textContent = 'Extracting template (10–60s)…';
+    for(;;){
+      await new Promise(r => setTimeout(r, 2500));
+      const j = await (await fetch(`/v1/jobs/${job_id}`, {headers:H})).json();
+      if(j.status === 'succeeded'){
+        log.textContent = j.result.results.map(p =>
+          p.status === 'enrolled' ? `enrolled: ${p.templates} templates, ${p.minutiae} minutiae`
+                                  : `rejected: ${p.reason_code} — ${p.detail}`).join('\n');
+        break;
+      }
+      if(j.status === 'failed'){ log.textContent = 'failed: ' + j.error.reason_code; break; }
+    }
+  }catch(e){ log.textContent = 'Error: ' + e.message; }
+  busy = false;
+}
+
+$('shoot').onclick = capture;
+$('force').onclick = capture;
+video.addEventListener('loadedmetadata', silhouettePath);
+addEventListener('resize', silhouettePath);
+start();
+</script>
+</body>
+</html>

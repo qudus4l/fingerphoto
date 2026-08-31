@@ -1,8 +1,10 @@
 """Liveness, readiness, and version endpoints."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from ... import store, version
 from ..schemas import VersionOut
@@ -10,6 +12,16 @@ from ..settings import get_settings
 
 public_router = APIRouter()  # mounted without auth
 router = APIRouter()  # mounted behind the API key
+
+STATIC = Path(__file__).resolve().parent.parent / "static"
+
+
+@public_router.get("/capture", include_in_schema=False)
+async def capture_page():
+    """Guided capture UI. Unauthenticated because it is just a static page —
+    the API key is entered in the form and travels on the XHRs it makes.
+    Note: browsers only grant camera access over HTTPS or localhost."""
+    return FileResponse(STATIC / "capture.html", media_type="text/html")
 
 
 @public_router.get("/healthz")
