@@ -26,7 +26,7 @@
          border:1px solid var(--line);margin:10px auto 0;flex:0 0 auto}
   video{display:block;width:100%;height:100%;object-fit:cover}
   #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-  .checks{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;
+  .checks{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;
           margin-top:10px;flex:0 0 auto}
   .check{background:var(--panel);border:1px solid var(--line);border-radius:9px;
          padding:7px 9px}
@@ -55,11 +55,17 @@
            font-family:ui-monospace,Menlo,monospace}
   #meta{font-size:11px;color:#5d6875;text-align:center;padding-bottom:6px;
         flex:0 0 auto;font-family:ui-monospace,Menlo,monospace}
+  #vidhint{font-size:11px;color:#5d6875;line-height:1.35;padding:6px 2px 0}
   .modes{display:flex;gap:6px;padding-top:10px;flex:0 0 auto}
   .mode{flex:1;padding:9px;border-radius:8px;font-size:15px;font-weight:600;
         background:var(--panel);color:var(--muted);border:1px solid var(--line)}
   .mode.on{background:var(--accent);color:#08131f;border-color:var(--accent)}
+  .mode.small{flex:0 0 auto;font-size:13px;padding:9px 9px}
   #result{font-size:15px}
+  details.trace{margin-top:6px}
+  details.trace summary{font-size:11px;color:#5d6875;cursor:pointer;list-style:none}
+  details.trace pre{font-size:10px;line-height:1.35;color:#7a8593;margin:5px 0 0;
+                    white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace}
   #result .big{font-size:26px;font-weight:700;letter-spacing:-.02em;
                display:block;margin-bottom:2px}
   #result .sub{font-size:13px;color:var(--muted);display:block}
@@ -69,7 +75,9 @@
   <div class="modes">
     <button class="mode on" data-mode="enroll">Enroll</button>
     <button class="mode" data-mode="identify">Identify</button>
-    <button class="mode" id="lens" title="Switch camera">Lens ▸</button>
+    <button class="mode small" id="lens" title="Switch camera">Lens ▸</button>
+    <button class="mode small" id="torch" title="Torch" style="display:none">Light</button>
+    <button class="mode small" id="zoom" title="Zoom" style="display:none">1×</button>
   </div>
   <div class="row">
     <input id="name" placeholder="Name" autocomplete="off" autocapitalize="words">
@@ -100,6 +108,7 @@
     <div class="check" id="c-fill"><div class="label">Fill</div><div class="val">–</div></div>
     <div class="check" id="c-focus"><div class="label">Focus</div><div class="val">–</div></div>
     <div class="check" id="c-light"><div class="label">Light</div><div class="val">–</div></div>
+    <div class="check" id="c-ridge"><div class="label">Ridges</div><div class="val">–</div></div>
   </div>
 
   <div id="status">Starting camera…</div>
@@ -111,7 +120,20 @@
          actually matches was taken with the phone's own Camera app, which has
          both. So offer that route directly. -->
     <button id="upload" class="secondary">Use a photo from the Camera app</button>
+    <!-- The video route is the best capture this project has on an iPhone: the
+         Camera app's video mode gives a CONTINUOUS torch, tap-to-focus and 4K,
+         none of which getUserMedia exposes to Safari. The server scores every
+         sampled frame and keeps only the few with real ridge structure, so a
+         few seconds of slow rocking beats one lucky shutter press.
+         On Android Chrome the Capture button does that search itself (see the
+         adaptive section), so this route is the fallback there, not the
+         recommendation. -->
+    <button id="uploadvid" class="secondary">Record a 3–5 s video in the Camera app</button>
+    <div id="vidhint">Video mode · flash ON (it stays on as a torch) · tap the
+      fingertip to focus · fill the outline · rock slowly nearer and further ·
+      4K if offered</div>
     <input type="file" id="pick" accept="image/*" style="display:none">
+    <input type="file" id="pickvid" accept="video/*" style="display:none">
   </div>
   <div id="meta"></div>
 
@@ -166,7 +188,9 @@ function show(html, kind){        // rich result (identify verdict)
 
 function setMode(m){
   mode = m;
-  document.querySelectorAll('.mode').forEach(b =>
+  // Scoped to the mode buttons: the torch and zoom buttons live in the same
+  // row and carry their own 'on' state, which a blanket query would clear.
+  document.querySelectorAll('.mode[data-mode]').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === m));
   $('name').style.display = (m === 'enroll') ? '' : 'none';
   $('key').style.flex = (m === 'enroll') ? '0 0 42%' : '1';
@@ -207,7 +231,10 @@ function silhouettePath(){
   const px = Math.round(frac*vw);
   $('sizelab').textContent = `outline ${px}px · ridge ~${(px*0.023).toFixed(1)}px`;
   $('meta').textContent = `${vw}x${vh} · ${Math.round(frac*100)}% of frame`
-    + (window.__focusCtl ? ` · focus ${window.__focusCtl}` : '');
+    + (window.__focusCtl ? ` · focus ${window.__focusCtl}` : '')
+    + (window.__torch ? ` · torch ${window.__torch}` : '')
+    + (window.__zoom ? ` · zoom ${window.__zoom}` : '')
+    + (window.__stills ? ` · stills ${window.__stills}` : '');
 }
 
 function analyse(){
@@ -276,35 +303,59 @@ function tick(){
     setCheck($('c-fill'), fillOk, Math.round(m.fill*100)+'%');
     setCheck($('c-focus'), focusOk, m.focus.toFixed(1));
     setCheck($('c-light'), lightOk, Math.round(m.luma));
+    // Only spend uplink on frames that are framed and lit well enough for the
+    // answer to be meaningful.
+    ridgeWorthIt = fillOk && lightOk;
+    const ridgeOk = ridgeScore != null && ridgeScore >= ridgeGate;
+    setCheck($('c-ridge'), ridgeOk,
+             ridgeScore == null ? '–' : ridgeScore.toFixed(2));
     const hasName = mode === 'identify' || !!$('name').value.trim();
     $('name').className = hasName ? '' : 'missing';
-    const ready = fillOk && focusOk && lightOk && hasName;
     // The shutter stays locked until the frame is usable — a bad photo enrolled
     // is worse than no photo, because it pollutes the gallery silently. The
-    // gate is only legitimate because every check is now REACHABLE: focus is
+    // gate is only legitimate because every check is REACHABLE: focus is
     // measured against the last 1.5 s, so holding still always satisfies it.
     // Any future check added here must have the same property.
+    //
+    // Two of them are dropped where the CAMERA can satisfy them instead of the
+    // user: focus when we can drive the lens ourselves (holding still cannot
+    // move a lens parked at the wrong distance, but a sweep can), and light
+    // when there is a torch to switch on. Both stay reachable — by the machine.
+    const focusMine = canFocus, lightMine = adaptive && hasTorch;
+    const ready = fillOk && (focusOk || focusMine) && (lightOk || lightMine) && hasName;
     $('shoot').disabled = !ready;
     // Name the blocking check on the button itself, so the reason is visible
     // without reading the status line.
     $('shoot').textContent = ready
-      ? (mode === 'enroll' ? 'Capture & enrol' : 'Identify')
+      ? (adaptive ? (mode === 'enroll' ? 'Auto capture & enrol' : 'Auto identify')
+                  : (mode === 'enroll' ? 'Capture & enrol' : 'Identify'))
       : !hasName ? 'Enter a name first'
       : !fillOk  ? 'Move closer'
-      : !focusOk ? 'Hold steady…'
+      : (!focusOk && !focusMine) ? 'Hold steady…'
       : (m.clip > MAX_CLIP ? 'Too much glare' : 'Needs more light');
     if(!sticky){
       say(!hasName ? 'Enter a name above, then capture'
         : !fillOk  ? 'Move closer — fill the outline edge to edge'
-        : !focusOk ? (m.bgSharper
+        : (!focusOk && !focusMine) ? (m.bgSharper
              ? 'Background looks sharper than your thumb — rest it on a desk or '
                + 'your other palm so there is nothing far away for the camera '
                + 'to lock onto.'
              : 'Not sharp yet — rock the phone slowly nearer and further. If it '
                + 'never sharpens, press Lens to try another camera (an ultrawide '
                + 'focuses much closer), or – to shrink the outline.')
-        : !lightOk ? (m.clip > MAX_CLIP ? 'Too much glare — angle away from the light'
-                                        : 'Too dark — add light or use a lamp')
+        : (!lightOk && !lightMine)
+            ? (m.clip > MAX_CLIP ? 'Too much glare — angle away from the light'
+                                 : 'Too dark — add light or use a lamp')
+        // Everything the browser can measure is green, but the server says
+        // there are no ridges. That is the iPhone failure mode exactly, and
+        // no amount of holding still fixes it — send them to the video route.
+        // Where the sweep exists it IS the fix, so the advice changes.
+        : (ridgeScore != null && !ridgeOk && !adaptive)
+            ? 'Sharp, but no ridges resolved (' + ridgeScore.toFixed(2) + ' of '
+              + ridgeGate.toFixed(2) + ') — record a video with the button below '
+              + 'instead: flash stays on and you can tap to focus.'
+        : adaptive ? 'Ready — hold the thumb in the outline and press capture. '
+                   + 'The phone will search the focus and the light itself.'
         : 'Looks good — hold still and capture',
         ready ? 'good' : '');
     }
@@ -313,6 +364,13 @@ function tick(){
 }
 
 let cams = [], camIdx = 0, curStream = null;
+let hasTorch = false, torchOn = false;
+
+async function toggleTorch(){
+  if(busy) return;                 // the sweep owns the torch while it runs
+  await setTorchTo(!torchOn);
+  silhouettePath();
+}
 
 async function listCams(){
   try{
@@ -346,8 +404,12 @@ async function start(deviceId){
     curStream = stream;
     const track = stream.getVideoTracks()[0];
     let focusCtl = 'auto (no control)';
+    camCaps = {}; canFocus = false; adaptive = false;
+    imageCapture = null; photoCaps = null; stillSize = null; stillsBroken = false;
+    focusNow = null; evNow = 0; zoomNow = 1; userZoom = 1;
     try{
       const caps = track.getCapabilities ? track.getCapabilities() : null;
+      camCaps = caps || {};
       if(caps && caps.width && caps.width.max > (track.getSettings().width||0))
         await track.applyConstraints({width:{ideal:caps.width.max},
                                       height:{ideal:caps.height.max}});
@@ -362,8 +424,57 @@ async function start(deviceId){
         await track.applyConstraints({advanced:[{pointsOfInterest:[{x:0.5,y:0.5}]}]});
         focusCtl += ' + centre POI';
       }
+      // Manual focus is what makes the adaptive sweep possible, and it is the
+      // dividing line between platforms: Android Chrome offers it, no iOS
+      // browser does (see the adaptive section for the details that matter).
+      canFocus = !!(caps && caps.focusDistance && caps.focusMode
+                    && caps.focusMode.includes('manual')
+                    && caps.focusDistance.max > 0);
+      if(canFocus)
+        focusCtl = `manual ${fmt(caps.focusDistance.min)}–${fmt(caps.focusDistance.max)}m`;
+      // Torch. Android Chrome exposes it; iOS Safari does not expose one at
+      // all, so the button only appears where the browser actually offers it —
+      // never claim flash we cannot deliver. Flash is the single biggest
+      // lever on ridge contrast, so turn it on by default when we have it.
+      hasTorch = !!(caps && caps.torch);
+      if(hasTorch){
+        try{ await track.applyConstraints({advanced:[{torch:true}]}); torchOn = true; }
+        catch(e){ torchOn = false; }
+      }
+      $('torch').style.display = hasTorch ? '' : 'none';
+      $('torch').classList.toggle('on', torchOn);
+      if(caps && caps.zoom){
+        zoomNow = userZoom = track.getSettings().zoom || caps.zoom.min || 1;
+        $('zoom').style.display = '';
+        $('zoom').textContent = fmt(zoomNow,1) + '×';
+      }else{
+        $('zoom').style.display = 'none';
+      }
     }catch(e){ focusCtl = 'auto (constraint rejected)'; }
+    // A real still, not a preview frame: Chromium builds a SEPARATE capture
+    // request that re-applies focus, torch and exposure, so a still taken
+    // mid-sweep is shot at the settings we searched for. It falls back to the
+    // PREVIEW size unless an explicit one is passed — hence pickStill().
+    try{
+      if(window.ImageCapture){
+        imageCapture = new ImageCapture(track);
+        // Raced, because this sits between opening the camera and showing the
+        // preview: if it hangs the page never starts at all.
+        photoCaps = await Promise.race([
+          imageCapture.getPhotoCapabilities(),
+          sleep(3000).then(() => { throw new Error('getPhotoCapabilities timed out'); }),
+        ]);
+        stillSize = pickStill(photoCaps);
+      }
+    }catch(e){ imageCapture = null; photoCaps = null; stillSize = null; }
+    // The sweep needs at least one knob worth turning. Where there is none —
+    // every iOS browser, most desktops — the Capture button keeps the burst.
+    adaptive = canFocus || hasTorch;
     window.__focusCtl = focusCtl;
+    window.__torch = hasTorch ? (torchOn ? 'on' : 'off') : 'unavailable';
+    window.__zoom = (camCaps && camCaps.zoom) ? fmt(zoomNow,1) + '×' : '';
+    window.__stills = stillSize ? `${stillSize.w}x${stillSize.h}`
+                    : imageCapture ? 'preview size' : 'unavailable';
     video.srcObject = stream;
     await video.play();
     layout();
@@ -405,23 +516,63 @@ function focusOf(canvas){
 }
 
 let lastShot = null;   // kept so a failure can be shown back to the user
+let shotByName = {};   // name -> canvas, so a result can show the frame that won
 
+// The burst now UPLOADS ALL FIVE FRAMES and lets the server choose with the
+// same ridge measurement the enrollment gate uses. The client's Laplacian
+// ranking stays only to pick the thumbnail shown on failure: sharpness and
+// ridge structure are different things, and picking on sharpness is what let
+// a frame with no readable print win the burst and get enrolled.
 async function burst(){
   const shots = [];
   for(let i=0;i<BURST;i++){
     const c = grabFrame();
-    shots.push({c, f: focusOf(c)});
+    shots.push({c, f: focusOf(c), name: `burst_${i}.jpg`});
     say(`Capturing burst… ${i+1}/${BURST}`);
     await new Promise(r => setTimeout(r, BURST_MS));
   }
-  shots.sort((a,b)=>b.f-a.f);
-  lastShot = shots[0];
-  return new Promise(res => shots[0].c.toBlob(b=>res(b), 'image/jpeg', 0.95));
+  shotByName = {};
+  for(const s of shots) shotByName[s.name] = s.c;
+  lastShot = shots.slice().sort((a,b)=>b.f-a.f)[0];
+  const blobs = await Promise.all(shots.map(s =>
+    new Promise(res => s.c.toBlob(b => res({blob:b, name:s.name}), 'image/jpeg', 0.95))));
+  return blobs;
 }
 
+// XHR, not fetch: a 4K clip is 15-35 MB and a silent multi-second wait reads
+// as a hang. Resolves like a trimmed-down fetch Response.
+function upload(url, fd, H, onProgress){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    for(const k in H) xhr.setRequestHeader(k, H[k]);
+    xhr.upload.onprogress = e => {
+      if(e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      let json = null;
+      try{ json = JSON.parse(xhr.responseText); }catch(e){}
+      resolve({status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, json});
+    };
+    xhr.onerror = () => reject(new Error('network error during upload'));
+    xhr.send(fd);
+  });
+}
+
+const mb = n => (n/1048576).toFixed(1);
+
 const FRIENDLY = {
-  QUALITY_TOO_LOW: 'Ridges too faint to read. Get closer, tap to focus, and '
+  QUALITY_TOO_LOW: 'Too few ridge features to enrol. Get closer, tap to focus, and '
     + 'add light — avoid glare straight off the skin.',
+  // The server distinguishes "no ridges were resolved at all" from "ridges were
+  // read but yielded too few minutiae"; only the first is a re-shoot.
+  QUALITY_NO_RIDGES: 'No ridge pattern could be resolved — the photo has skin but '
+    + 'no readable print. Hold the pad flat to the lens about a hand-width away, '
+    + 'tap the fingertip to focus, and turn the flash on. Or record a short video '
+    + 'with the button below — the server keeps the sharpest frames of it.',
+  VIDEO_UNREADABLE: 'That video could not be decoded. Record it in the Camera app '
+    + 'and pick it from the library rather than converting it.',
+  VIDEO_TOO_LONG: 'That clip is too long — 3 to 5 seconds is plenty.',
   NO_FINGER_FOUND: 'Could not find a fingertip. Fill the outline with just '
     + 'your thumb, plain background behind it.',
   GALLERY_EMPTY: 'Nobody is enrolled yet — enrol first.',
@@ -429,17 +580,31 @@ const FRIENDLY = {
   IMAGE_TOO_LARGE: 'Image too large for the server limit.',
 };
 
-function failureCard(code, detail){
-  const tip = FRIENDLY[code] || detail || 'Unknown error';
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function failureCard(code, detail, selection){
+  const noRidges = code === 'QUALITY_TOO_LOW' && /no resolvable ridge/.test(detail || '');
+  const tip = noRidges ? FRIENDLY.QUALITY_NO_RIDGES : (FRIENDLY[code] || detail || 'Unknown error');
+  const head = noRidges ? 'No ridges resolved'
+             : code === 'QUALITY_TOO_LOW' ? 'Too few features' : 'Failed';
   const thumb = lastShot
     ? `<img src="${lastShot.c.toDataURL('image/jpeg',0.5)}" style="width:56px;
          height:56px;object-fit:cover;border-radius:6px;flex:0 0 auto">` : '';
+  // Keep the server's own words too: they carry the measured numbers, which is
+  // what makes a repeated failure diagnosable instead of mysterious.
+  const measured = detail && tip !== detail
+    ? `<span class="sub" style="opacity:.62;font-size:11px">${esc(detail)}</span>` : '';
+  // How many frames were even considered: "none of 42 frames" is a different
+  // problem from "the one photo you sent", and the user can act on each.
+  const scanned = selection && selection.candidates > 1
+    ? `<span class="sub" style="opacity:.62;font-size:11px">`
+      + `scored ${selection.candidates} frames; none cleared the ridge gate</span>` : '';
   return `<div style="display:flex;gap:10px;align-items:center">${thumb}`
-    + `<div><span class="big">✗ ${code === 'QUALITY_TOO_LOW' ? 'Too blurry' : 'Failed'}`
-    + `</span><span class="sub">${tip}</span></div></div>`;
+    + `<div><span class="big">✗ ${head}</span>`
+    + `<span class="sub">${tip}</span>${measured}${scanned}${traceHtml()}</div></div>`;
 }
 
-async function poll(jobId, H, label){
+async function poll(jobId, H, label, hint){
   for(let i=0;;i++){
     await new Promise(r=>setTimeout(r, 2500));
     const j = await (await fetch(`/v1/jobs/${jobId}`, {headers:H})).json();
@@ -448,13 +613,14 @@ async function poll(jobId, H, label){
       const e = new Error(j.error?.detail || 'job failed');
       e.code = j.error?.reason_code; throw e;
     }
-    say(`${label}… ${(i*2.5+2.5)|0}s (takes 10–60s)`);
+    say(`${label}… ${(i*2.5+2.5)|0}s (${hint || 'takes 10–60s'})`);
   }
 }
 
-// `source`, when given, supplies [blob, filename] instead of the live burst —
-// that is how a photo taken in the Camera app enters the same pipeline.
-async function capture(source){
+// `source`, when given, supplies [file, filename] instead of the live burst —
+// that is how a photo or a video from the Camera app enters the same pipeline.
+// `kind` is 'photo' | 'video' | 'burst' and only affects the copy.
+async function capture(source, kind){
   if(busy) return;
   const name = $('name').value.trim(), key = $('key').value.trim();
   if(mode === 'enroll' && !name){
@@ -463,43 +629,70 @@ async function capture(source){
   }
   if(key) localStorage.setItem('fp_key', key);
   busy = true; sticky = '1';
-  $('shoot').disabled = true; $('upload').disabled = true;
+  $('shoot').disabled = true; $('upload').disabled = true; $('uploadvid').disabled = true;
   $('shoot').textContent = 'Working…';
   const H = {'X-API-Key': key};
+  const isVideo = kind === 'video';
   try{
-    let blob, fname;
+    // Each entry is {blob, name}. The burst sends five; an upload sends one.
+    let parts;
     if(source){
-      lastShot = null;                    // no canvas to show back on failure
-      [blob, fname] = await source();
-      say(`Read ${(blob.size/1024)|0} KB from ${fname}…`);
+      lastShot = null; shotByName = {};
+      const [file, fname] = await source();
+      parts = [{blob: file, name: fname}];
+      say(`Read ${mb(file.size)} MB from ${fname}…`);
+    }else if(kind === 'auto'){
+      // The camera searches its own focus and light; what comes back is a
+      // handful of candidates for the server to choose between.
+      lastShot = null; shotByName = {};
+      parts = await autoCapture();
+      say(`Captured ${parts.length} frames — uploading…`);
     }else{
       say('Capturing burst…');
-      blob = await burst(); fname = 'capture.jpg';
+      parts = await burst();
     }
+    const total = parts.reduce((n,p)=>n+p.blob.size, 0);
     const fd = new FormData();
+    for(const p of parts) fd.append('files', p.blob, p.name);
+    // A burst is one finger photographed five times, so exactly one frame
+    // should win. A video is scored by the server's own per-clip budget.
+    if(!source) fd.append('best_of', '1');
+    const onProg = (loaded, tot) =>
+      say(`Uploading… ${mb(loaded)} / ${mb(tot)} MB`);
+    const wait = isVideo ? 'Scoring frames' : (mode === 'identify' ? 'Matching' : 'Extracting template');
+    const hint = isVideo ? 'takes 30–90s'
+               : kind === 'auto' ? 'takes 20–60s' : 'takes 10–60s';
 
     if(mode === 'identify'){
-      fd.append('file', blob, fname);
-      say(`Captured ${(blob.size/1024)|0} KB. Searching…`);
-      const r = await fetch('/v1/identify', {method:'POST', headers:H, body:fd});
+      say(`Sending ${mb(total)} MB…`);
+      const r = await upload('/v1/identify', fd, H, onProg);
       if(r.status === 401) throw new Error('auth failed — check the API key');
-      if(!r.ok) throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
-      const res = await poll((await r.json()).job_id, H, 'Matching');
+      if(!r.ok) throw problemError(r);
+      const res = await poll(r.json.job_id, H, wait, hint);
       const runner = res.scores[1];
-      const sub = (runner ? `next closest ${runner.name} at ${runner.score}` : 'only one enrolled')
+      // Report how many frames were SCORED, not just how many were extracted:
+      // "best of 5" is the number that tells the user selection did its job.
+      const scored = (res.selection && res.selection.candidates) || 0;
+      const used = res.frames && scored > 1
+        ? `${res.frames.used} of ${scored} frames used · `
+        : '';
+      const sub = used
+                  + (runner ? `next closest ${runner.name} at ${runner.score}` : 'only one enrolled')
                   + ` · threshold ${res.threshold}`;
       if(res.match)
-        show(`<div><span class="big">✓ ${res.match.name}</span>`
-           + `<span class="sub">score ${res.match.score} — ${sub}</span></div>`, 'good');
+        show(`<div><span class="big">✓ ${esc(res.match.name)}</span>`
+           + `<span class="sub">score ${res.match.score} — ${sub}</span>`
+           + `${traceHtml()}</div>`, 'good');
       else
         show(`<div><span class="big">No match</span><span class="sub">`
-           + `closest ${res.best_candidate.name} at ${res.best_candidate.score}, `
-           + `below threshold ${res.threshold}</span></div>`, 'err');
+           + `closest ${esc(res.best_candidate.name)} at ${res.best_candidate.score}, `
+           + `below threshold ${res.threshold} · ${sub}</span>`
+           + `${traceHtml()}</div>`, 'err');
       return;
     }
 
     // enroll
-    say(`Captured ${(blob.size/1024)|0} KB. Creating identity…`);
+    say(`Sending ${mb(total)} MB. Creating identity…`);
     let uuid, r = await fetch('/v1/identities', {
       method:'POST', headers:{...H,'Content-Type':'application/json'},
       body: JSON.stringify({name, consent:true})});
@@ -514,29 +707,753 @@ async function capture(source){
       throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
     }else{ uuid = (await r.json()).uuid; }
 
-    fd.append('files', blob, fname);
     fd.append('finger', 'right_thumb');
-    say('Uploading…');
-    r = await fetch(`/v1/identities/${uuid}/photos`, {method:'POST', headers:H, body:fd});
-    if(!r.ok) throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
-    const res = await poll((await r.json()).job_id, H, 'Extracting template');
-    const p = res.results[0];
-    if(p.status !== 'enrolled')
-      { show(failureCard(p.reason_code, p.detail), 'err'); return; }
+    const up = await upload(`/v1/identities/${uuid}/photos`, fd, H, onProg);
+    if(!up.ok) throw problemError(up);
+    const res = await poll(up.json.job_id, H, wait, hint);
+    const good = res.results.filter(x => x.status === 'enrolled');
+    const bad  = res.results.filter(x => x.status !== 'enrolled');
+    if(!good.length){
+      const p = bad[0] || {};
+      if(p.source && shotByName[p.source]) lastShot = {c: shotByName[p.source]};
+      show(failureCard(p.reason_code, p.detail, res.selection), 'err'); return;
+    }
     const info = await (await fetch(`/v1/identities/${uuid}`, {headers:H})).json();
-    show(`<div><span class="big">✓ ${name} — ${info.photos} photo`
+    const sel = res.selection || {};
+    const kept = good.map(g => (g.candidate_score == null ? '–' : g.candidate_score.toFixed(2))).join(' / ');
+    // Which camera settings actually produced the enrolled photo — the whole
+    // point of the search, and the number the user can act on next time.
+    const won = wonLabel(good[0].source);
+    const from = (sel.candidates > good.length
+      ? `best ${good.length} of ${sel.candidates} frames · ridge ${kept} · ` : '')
+      + (won ? won + ' · ' : '');
+    const skipped = bad.length ? ` ${bad.length} frame${bad.length===1?'':'s'} refused.` : '';
+    show(`<div><span class="big">✓ ${esc(name)} — ${info.photos} photo`
        + `${info.photos===1?'':'s'}</span><span class="sub">`
-       + `${p.templates} templates, ${p.minutiae} minutiae this shot · `
-       + `${info.templates} total. ${info.photos < 3
+       + `${from}${good[0].templates} templates, ${good[0].minutiae} minutiae, ridge quality `
+       + `${good[0].quality == null ? '–' : good[0].quality.toFixed(2)} · `
+       + `${info.templates} total.${skipped} ${info.photos < 3
             ? 'Capture ' + (3-info.photos) + ' more for a solid identity.'
-            : 'Ready — switch to Identify.'}</span></div>`, 'good');
+            : 'Ready — switch to Identify.'}</span>${traceHtml()}</div>`, 'good');
   }catch(e){
     show(e.code ? failureCard(e.code, e.message)
-       : `<div><span class="big">✗ Error</span><span class="sub">${e.message}</span></div>`,
+       : `<div><span class="big">✗ Error</span><span class="sub">${esc(e.message)}</span></div>`,
        'err');
   }finally{
-    busy = false; $('upload').disabled = false;
+    busy = false; $('upload').disabled = false; $('uploadvid').disabled = false;
+    // Restore the button here rather than leaving it to tick(): tick only
+    // repaints when it can measure a frame, so any failure with a stalled or
+    // dark preview used to leave the page reading "Working…" for ever.
+    $('shoot').disabled = false;
+    $('shoot').textContent = adaptive
+      ? (mode === 'enroll' ? 'Auto capture & enrol' : 'Auto identify')
+      : (mode === 'enroll' ? 'Capture & enrol' : 'Identify');
     setTimeout(()=>{ sticky=''; }, 8000);
+  }
+}
+
+function problemError(r){
+  const e = new Error((r.json && r.json.detail) || ('HTTP ' + r.status));
+  e.code = r.json && r.json.reason_code;
+  return e;
+}
+
+// --- Adaptive capture (Android Chrome) ------------------------------------
+// Everything below drives the camera instead of asking the user to. It is
+// capability-gated and simply does not exist on iOS: no WebKit browser exposes
+// focus or torch control to a web page, and every iOS browser is WebKit, so
+// there the Capture button keeps the five-frame burst.
+//
+// Three facts this code depends on, checked against Chromium's
+// VideoCaptureCamera2.java rather than assumed:
+//   * focusDistance is in METRES (Chromium converts 1/x from Camera2's
+//     diopters) and LENS_FOCUS_DISTANCE is only applied while CONTROL_AF_MODE
+//     is OFF — so focusMode:'manual' and focusDistance MUST travel in the same
+//     applyConstraints call or the distance is silently ignored.
+//   * ImageCapture.takePhoto() builds a separate still request that re-applies
+//     focus, torch and exposure, so a still taken mid-sweep is shot at the
+//     settings we searched for. It closes the preview session while it runs,
+//     hence the settle afterwards.
+//   * fillLightMode:'flash' does not fire on several Android devices
+//     (crbug 41318044). The torch is used instead — which is what we want
+//     anyway, because the light has to be on while we MEASURE, not only at the
+//     shutter.
+//
+// Lens position is linear in DIOPTERS, not metres, so the coarse sweep samples
+// uniformly in 1/d. A fingertip sits 5-25 cm away, i.e. 4-20 D, while the
+// 0.01 m step Chrome reports is ~1 D at 10 cm but only ~0.25 D at 20 cm.
+//
+// Search here, decide on the server: the page's job is to produce a handful of
+// diverse, near-optimal candidates; frames.py picks the winner with the very
+// same detector the enrolment gate uses.
+const STILL_MAX_PX = 4096;      // the iPhone photos this pipeline was tuned on
+const SWEEP_FAR_M = 0.30, SWEEP_NEAR_FLOOR_M = 0.05;
+const DIO_STEP = 1.0, MAX_COARSE = 10, MIN_COARSE = 4;
+const SETTLE_FAR = 400, SETTLE_NEAR = 250, SETTLE_LIGHT = 800;
+const SETTLE_ZOOM = 500, SETTLE_STILL = 400, STILL_TIMEOUT_MS = 4000;
+const RIDGE_SCALE_PERIOD = 8;   // px; quality.py normalises to this spacing
+const METRIC_ERODE = 6, METRIC_MIN_PX = 2000;
+const MIN_FOCUS_M = 0.02;       // never ask for 0 m: Chromium sends 1/d diopters
+const CONSTRAINT_MS = 2500;     // an unanswered applyConstraints must not freeze the run
+const MAX_RUN_MS = 90000;       // hard ceiling on the whole search
+const ZOOM_STEPS = [1.5, 2, 3], ZOOM_WIN_MARGIN = 0.05;
+const DEBUG = /[?&]debug=1/.test(location.search);
+
+let camCaps = {}, canFocus = false, adaptive = false;
+let imageCapture = null, photoCaps = null, stillSize = null, stillsBroken = false;
+let focusNow = null, evNow = 0, zoomNow = 1, userZoom = 1;
+let lastFocusError = '', lastCamError = '';
+let trace = [];
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// applyConstraints does not always answer. On Android the driver can go away
+// to reconfigure the camera and simply never resolve OR reject the promise,
+// and an await on that freezes the whole capture with no error and no
+// progress. So every camera call is raced against a timeout and treated as a
+// refusal if it does not come back.
+async function applyTimed(t, c, label){
+  let timer;
+  try{
+    await Promise.race([
+      t.applyConstraints(c),
+      new Promise((_, rej) => { timer = setTimeout(() => {
+        const e = new Error(`${label} did not answer in ${CONSTRAINT_MS}ms`);
+        e.timedOut = true;                   // unresponsive, not merely refused
+        rej(e);
+      }, CONSTRAINT_MS); }),
+    ]);
+  }finally{ clearTimeout(timer); }
+}
+const trk = () => curStream && curStream.getVideoTracks()[0];
+const fmt = (n, d) => (n == null || isNaN(n)) ? '–' : (+n).toFixed(d == null ? 2 : d);
+
+// Wait for a setting to take effect: a fixed delay AND two fresh frames, so we
+// never measure a frame the lens has not moved for. Capped, because a stalled
+// preview must not hang the sequence.
+function nextFrames(n){
+  if(!video.requestVideoFrameCallback) return sleep(60*n);
+  return new Promise(res => {
+    let i = 0;
+    const step = () => { if(++i >= n) res(); else video.requestVideoFrameCallback(step); };
+    video.requestVideoFrameCallback(step);
+  });
+}
+async function settle(ms){ await sleep(ms); await Promise.race([nextFrames(2), sleep(500)]); }
+
+// Cap the still: a 48 MP frame is 15 MB and seconds of server-side scoring for
+// no ridge benefit, because the pipeline normalises to an 8 px period anyway.
+function pickStill(pc){
+  if(!pc || !pc.imageWidth || !pc.imageHeight) return null;
+  const mw = pc.imageWidth.max|0, mh = pc.imageHeight.max|0;
+  if(!mw || !mh) return null;
+  const ws = pc.imageWidth.step || 1, hs = pc.imageHeight.step || 1;
+  const w = Math.max(pc.imageWidth.min || 0,
+                     Math.round(Math.min(mw, STILL_MAX_PX)/ws)*ws);
+  const h = Math.max(pc.imageHeight.min || 0,
+                     Math.round(Math.round(w*mh/mw)/hs)*hs);
+  return {w, h};
+}
+
+// --- The in-browser ridge signal ------------------------------------------
+// NOT a Laplacian. quality.py's negative result applies here too: plain
+// sharpness and orientation coherence are both satisfied by blurred skin,
+// which is exactly the failure this whole project keeps hitting. What
+// separates is a BAND-PASS at the ridge period, measured on skin only. So the
+// crop is rescaled to the same ~8 px ridge spacing the server normalises to,
+// band-passed with the same sigma 1 / sigma 3 pair, and the energy is
+// contrast-normalised so a brighter torch frame cannot win on brightness.
+function shrink(src, scale){
+  let cur = src, s = scale;
+  while(s < 0.5){                       // halve first: one big downscale aliases
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, cur.width >> 1); c.height = Math.max(1, cur.height >> 1);
+    c.getContext('2d').drawImage(cur, 0, 0, c.width, c.height);
+    cur = c; s *= 2;
+  }
+  if(s < 0.999){
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(cur.width*s));
+    c.height = Math.max(1, Math.round(cur.height*s));
+    c.getContext('2d').drawImage(cur, 0, 0, c.width, c.height);
+    cur = c;
+  }
+  return cur;
+}
+
+function integral(a, w, h){
+  const W = w+1, I = new Float64Array(W*(h+1));
+  for(let y=0; y<h; y++){
+    let row = 0;
+    for(let x=0; x<w; x++){ row += a[y*w+x]; I[(y+1)*W+(x+1)] = I[y*W+(x+1)] + row; }
+  }
+  return I;
+}
+function boxMean(I, w, h, x, y, r){
+  const W = w+1;
+  const x0 = x-r < 0 ? 0 : x-r, y0 = y-r < 0 ? 0 : y-r;
+  const x1 = x+r+1 > w ? w : x+r+1, y1 = y+r+1 > h ? h : y+r+1;
+  return (I[y1*W+x1] - I[y0*W+x1] - I[y1*W+x0] + I[y0*W+x0]) / ((x1-x0)*(y1-y0));
+}
+
+function ridgeMetric(c){
+  if(!c || !c.width) return null;
+  const period = c.width * 0.023;                 // same geometry as the sizer
+  const s = shrink(c, Math.min(1, RIDGE_SCALE_PERIOD / Math.max(1, period)));
+  const w = s.width, h = s.height;
+  if(w < 40 || h < 40) return null;
+  const d = s.getContext('2d').getImageData(0, 0, w, h).data;
+  const g = new Float32Array(w*h), skin = new Float32Array(w*h);
+  let nskin = 0, lum = 0, clipped = 0;
+  for(let i=0, p=0; p<d.length; p+=4, i++){
+    const r = d[p], gg = d[p+1], b = d[p+2];
+    const y = 0.299*r + 0.587*gg + 0.114*b;
+    g[i] = y;
+    if(y > 250) clipped++;
+    const cr = 0.5*r - 0.419*gg - 0.081*b + 128;  // same gate as the backend
+    if(cr > 135 && cr < 185 && r > gg && r > b){ skin[i] = 1; nskin++; lum += y; }
+  }
+  const out = {metric: null, fill: nskin/(w*h), luma: nskin ? lum/nskin : 0,
+               clip: clipped/(w*h), px: 0};
+  if(!nskin) return out;
+  const Ig = integral(g, w, h), Is = integral(skin, w, h);
+  let sum2 = 0, n = 0;
+  for(let y=0; y<h; y++) for(let x=0; x<w; x++){
+    if(!skin[y*w+x]) continue;
+    // Erode away from the finger outline: its edge is the strongest gradient in
+    // the frame and has nothing to do with ridges.
+    if(boxMean(Is, w, h, x, y, METRIC_ERODE) < 0.999) continue;
+    const bp = boxMean(Ig, w, h, x, y, 1) - boxMean(Ig, w, h, x, y, 3);
+    sum2 += bp*bp; n++;
+  }
+  out.px = n;
+  if(n >= METRIC_MIN_PX) out.metric = 1e4 * (sum2/n) / (out.luma*out.luma + 1);
+  return out;
+}
+
+// One measurement of the frozen outline box, with a retry: a single bad read
+// (the hand drifting, a frame arriving mid-lens-move) must not abort a sweep.
+async function measure(B){
+  for(let k=0; k<2; k++){
+    const c = cropCanvas(B);
+    const m = c ? ridgeMetric(c) : null;
+    if(m && m.metric != null && m.fill >= MIN_FILL*0.8) return Object.assign(m, {tile: c});
+    await settle(200);
+  }
+  return null;
+}
+
+// --- Camera knobs ---------------------------------------------------------
+function quantFocus(d){
+  const f = camCaps.focusDistance, st = (f.step > 0 ? f.step : 0.01);
+  // Round to the device's grid FIRST and clamp AFTER. Clamping first and
+  // rounding second can push the value back out of range — a min of 0.0333 on
+  // a 0.01 grid rounds to 0.03, below the minimum — and an out-of-range
+  // constraint is rejected outright rather than clipped.
+  let q = Math.round(d/st)*st;
+  const lo = Math.max(f.min || 0, MIN_FOCUS_M), hi = f.max || 3;
+  if(q < lo) q = Math.ceil(lo/st)*st;
+  if(q > hi) q = Math.floor(hi/st)*st;
+  // Never send zero. Several devices report focusDistance.min as 0, and
+  // Chromium converts the distance to 1/d diopters, so 0 becomes Infinity and
+  // the driver refuses the whole request.
+  if(!isFinite(q) || q <= 0) q = Math.max(lo, st);
+  return q;
+}
+async function setFocus(d){
+  const t = trk();
+  if(!t || !canFocus) return null;
+  const q = quantFocus(d);
+  const st = camCaps.focusDistance.step || 0.01;
+  // focusMode and focusDistance belong in ONE call: Chromium ignores the
+  // distance unless the AF mode is off in the same request. Some drivers
+  // reject that pair anyway, so try the separate forms before giving up — and
+  // always keep the reason, because "the camera refused manual focus" with no
+  // reason attached is not something anyone can act on.
+  const forms = [
+    {advanced:[{focusMode:'manual', focusDistance:q}]},
+    {advanced:[{focusMode:'manual'}, {focusDistance:q}]},
+    {advanced:[{focusDistance:q}]},
+  ];
+  for(const c of forms){
+    try{
+      await applyTimed(t, c, 'focus');
+      // An accepted constraint is not necessarily an applied one. Read it back
+      // where the browser reports it: a value that did not move means manual
+      // focus is advertised but inert, which is worth knowing now rather than
+      // after ten identical measurements.
+      const got = t.getSettings ? t.getSettings().focusDistance : undefined;
+      if(typeof got === 'number' && isFinite(got) && Math.abs(got - q) > 2*st){
+        lastFocusError = `asked ${fmt(q)}m, camera reports ${fmt(got)}m`;
+        continue;
+      }
+      const jump = focusNow == null ? 99 : Math.abs(1/q - 1/focusNow);
+      focusNow = q;
+      await settle(jump > 2 ? SETTLE_FAR : SETTLE_NEAR);
+      return q;
+    }catch(e){
+      lastFocusError = `${(e && e.name) || 'Error'}: ${(e && e.message) || e}`
+                     + ` (asked ${fmt(q)}m)`;
+      // A timeout means the driver is not answering at all, so the alternative
+      // constraint shapes will hang exactly the same way. Trying all three
+      // would cost three timeouts per distance for no chance of success.
+      if(e && e.timedOut) break;
+    }
+  }
+  return null;
+}
+async function setTorchTo(on){
+  const t = trk();
+  if(!t || !hasTorch || on === torchOn) return torchOn;
+  try{ await applyTimed(t, {advanced:[{torch:on}]}, 'torch'); torchOn = on; }
+  catch(e){ lastCamError = 'torch: ' + ((e && e.message) || e); }
+  $('torch').classList.toggle('on', torchOn);
+  window.__torch = torchOn ? 'on' : 'off';
+  await settle(SETTLE_LIGHT);            // AE needs time to converge on the new light
+  return torchOn;
+}
+async function setEV(ev){
+  const t = trk(), cc = camCaps.exposureCompensation;
+  if(!t || !cc) return evNow;
+  const st = cc.step || 0.1;
+  const v = Math.round(Math.min(cc.max, Math.max(cc.min, ev))/st)*st;
+  try{ await applyTimed(t, {advanced:[{exposureCompensation:v}]}, 'exposure'); evNow = v; }
+  catch(e){ lastCamError = 'exposure: ' + ((e && e.message) || e); }
+  await settle(SETTLE_LIGHT);
+  return evNow;
+}
+async function setZoom(z){
+  const t = trk(), zc = camCaps.zoom;
+  if(!t || !zc) return zoomNow;
+  const st = zc.step || 0.1;
+  const v = Math.round(Math.min(zc.max, Math.max(zc.min || 1, z))/st)*st;
+  try{ await applyTimed(t, {advanced:[{zoom:v}]}, 'zoom'); zoomNow = v; }
+  catch(e){ lastCamError = 'zoom: ' + ((e && e.message) || e); }
+  window.__zoom = fmt(zoomNow,1) + '×';
+  $('zoom').textContent = fmt(zoomNow,1) + '×';
+  silhouettePath();
+  await settle(SETTLE_ZOOM);
+  return zoomNow;
+}
+async function applyLight(o){
+  await setTorchTo(o.torch);
+  if(camCaps.exposureCompensation && Math.abs(evNow - (o.ev||0)) > 1e-6) await setEV(o.ev||0);
+}
+// Always run, even when the sequence throws: a half-finished sweep must not
+// leave the preview locked at 7 cm with the torch blazing.
+async function restoreCamera(entry){
+  const t = trk();
+  if(!t) return;
+  try{
+    if(camCaps.focusMode && camCaps.focusMode.includes('continuous'))
+      await applyTimed(t, {advanced:[{focusMode:'continuous'}]}, 'restore focus');
+  }catch(e){}
+  focusNow = null;
+  if(camCaps.exposureCompensation && evNow !== 0) await setEV(0);
+  if(hasTorch && torchOn !== entry.torch) await setTorchTo(entry.torch);
+  if(camCaps.zoom && Math.abs(zoomNow - entry.zoom) > 0.01) await setZoom(entry.zoom);
+  focusHist = [];        // the sweep's own frames would poison the rolling bar
+}
+
+// The server's verdict on one tile. Never throws and never blocks the sweep:
+// without an API key or a network the sequence still runs on the local signal.
+// Note the tile is the outline CROP while the uploaded candidates are whole
+// frames; the crop strategies run server-side either way, so this is a ranking
+// signal and the upload is the measurement.
+async function scoreTile(c){
+  const key = $('key').value.trim();
+  if(!key || !c) return null;
+  try{
+    const blob = await new Promise(r => c.toBlob(b => r(b), 'image/jpeg', 0.9));
+    if(!blob) return null;
+    const fd = new FormData();
+    fd.append('file', blob, 'tile.jpg');
+    const r = await fetch('/v1/quality', {method:'POST', headers:{'X-API-Key':key}, body:fd});
+    if(!r.ok) return null;
+    const j = await r.json();
+    if(typeof j.min_ridge_quality === 'number') ridgeGate = j.min_ridge_quality;
+    return typeof j.score === 'number' ? j.score : null;
+  }catch(e){ return null; }
+}
+
+async function takeStill(name){
+  if(!imageCapture || stillsBroken) return null;
+  try{
+    const opts = stillSize ? {imageWidth: stillSize.w, imageHeight: stillSize.h} : {};
+    const blob = await Promise.race([
+      imageCapture.takePhoto(opts),
+      sleep(STILL_TIMEOUT_MS).then(() => { throw new Error('timed out'); })
+    ]);
+    await settle(SETTLE_STILL);          // the preview session restarts after a still
+    return {blob, name};
+  }catch(e){
+    // One failure is enough: retrying costs 4 s a shot and never recovers.
+    stillsBroken = true;
+    window.__stills = 'unavailable (' + e.message + ')';
+    silhouettePath();
+    return null;
+  }
+}
+async function grabPart(name){
+  const c = grabFrame();
+  shotByName[name] = c;                  // so a failure can show what was shot
+  const blob = await new Promise(r => c.toBlob(b => r(b), 'image/jpeg', 0.95));
+  return blob ? {blob, name} : null;
+}
+async function part(base){
+  return (await takeStill('still_' + base + '.jpg')) || (await grabPart('frame_' + base + '.jpg'));
+}
+
+// --- The sequence ---------------------------------------------------------
+async function autoSequence(B, entry, log){
+  const t0 = performance.now();
+  const deadline = Date.now() + MAX_RUN_MS;
+  const step = canFocus ? (camCaps.focusDistance.step || 0.01) : 0.01;
+  const lost = 'Lost the thumb mid-sweep — keep it inside the outline and try again.';
+  // canFocus is what the browser ADVERTISES; useFocus is what actually worked.
+  // A driver can accept the capability query and refuse every constraint.
+  let useFocus = canFocus, best = null;
+  lastFocusError = ''; lastCamError = '';
+
+  // 1. Coarse focus sweep, uniform in diopters, scored by the server's own
+  //    ridge detector. The scores are fired off as we go and awaited at the
+  //    end, so the uploads overlap the lens moves instead of doubling the run.
+  sweep: if(useFocus){
+    const f = camCaps.focusDistance;
+    const near = Math.max(f.min || 0, SWEEP_NEAR_FLOOR_M);
+    const far  = Math.max(near + step, Math.min(f.max, SWEEP_FAR_M));
+    const dNear = 1/near, dFar = 1/far;
+    let n = Math.round((dNear - dFar)/DIO_STEP) + 1;
+    n = Math.max(MIN_COARSE, Math.min(MAX_COARSE, n));
+    const shots = [], pend = [];
+    let refused = 0;
+    for(let i=0; i<n; i++){
+      // Progress goes up BEFORE the await, not after: if a camera call hangs,
+      // the screen has to say which one, otherwise the page just reads "stuck".
+      const want = quantFocus(1/(dNear - (dNear - dFar)*i/(n-1)));
+      $('shoot').textContent = `Focus ${i+1}/${n}`;
+      say(`Searching focus ${i+1}/${n} — moving the lens to ${fmt(want)} m…`);
+      const d = await setFocus(want);
+      if(d == null){
+        refused++;
+        // One bad distance is not the end of the sweep, but if the first two
+        // fail with nothing measured the lens is not going to start working at
+        // the third — stop rather than grinding through the whole range.
+        if(!shots.length && refused >= 2) break;
+        continue;
+      }
+      say(`Searching focus ${i+1}/${n} — ${fmt(d)} m, measuring…`);
+      const m = await measure(B);
+      if(!m) throw new Error(lost);
+      const rec = {d, local: m.metric, fill: m.fill, clip: m.clip, server: null};
+      shots.push(rec);
+      pend.push(scoreTile(m.tile).then(v => { rec.server = v; }));
+      say(`Searching focus ${i+1}/${n} — ${fmt(d)} m, ridge signal ${fmt(m.metric,1)}`);
+      if(Date.now() > deadline){ log('focus   out of time, stopping the sweep early'); break; }
+    }
+    if(!shots.length){
+      // Manual focus is advertised but unusable on this device. Do NOT dead-end
+      // the capture: hand focus back to the camera and carry on with the light
+      // search and the shots, which is still better than the plain burst.
+      useFocus = false;
+      log(`focus   REFUSED at all ${refused} distances — ${lastFocusError || 'no reason given'}`);
+      log(`focus   caps were ${JSON.stringify(camCaps.focusDistance)}`);
+      log('focus   falling back to the camera\'s own autofocus');
+      say('This camera would not accept manual focus — falling back to its own '
+        + 'autofocus and searching the light instead.');
+      try{ await applyTimed(trk(), {advanced:[{focusMode:'continuous'}]}, 'restore focus'); }
+      catch(e){}
+      await settle(SETTLE_FAR);
+      break sweep;
+    }
+    if(refused) log(`focus   ${refused} of ${n} distances refused — ${lastFocusError}`);
+    say('Scoring the sweep…');
+    await Promise.all(pend);
+    const anyServer = shots.some(r => r.server != null);
+    for(const r of shots)
+      log(`focus   ${fmt(r.d)}m (${fmt(1/r.d,1)}D)  signal ${fmt(r.local,1)}`
+        + `  ridge ${r.server == null ? '–' : fmt(r.server)}`);
+    best = shots.reduce((a, b) => {
+      if(!anyServer) return b.local > a.local ? b : a;
+      const bs = b.server == null ? -1 : b.server, as = a.server == null ? -1 : a.server;
+      return bs > as || (bs === as && b.local > a.local) ? b : a;
+    });
+    log(`peak    ${fmt(best.d)}m by ${anyServer ? 'server ridge score' : 'local signal (no API key)'}`);
+
+    // 2. Fine pass on the metre grid around the peak, local signal only. No
+    //    uploads: at 10 cm one 0.01 m step is already ~1 D, so this is as fine
+    //    as the API can express, and five measurements cost ~1.5 s.
+    for(let attempt=0; attempt<2; attempt++){
+      const fine = [];
+      for(const k of [0, -2, -1, 1, 2]){
+        const d = quantFocus(best.d + k*step);
+        if(fine.some(r => Math.abs(r.d - d) < step/2)) continue;
+        await setFocus(d);
+        const m = await measure(B);
+        if(!m) throw new Error(lost);
+        fine.push({d, local: m.metric, fill: m.fill});
+        $('shoot').textContent = `Refine ${fine.length}/5`;
+        say(`Refining focus — ${fmt(d)} m, ridge signal ${fmt(m.metric,1)}`);
+      }
+      for(const r of fine) log(`refine  ${fmt(r.d)}m  signal ${fmt(r.local,1)}`);
+      if(Date.now() > deadline) log('refine  out of time');
+      const here = fine.find(r => Math.abs(r.d - best.d) < step/2);
+      // The peak re-measuring far below its sweep value means the scene moved
+      // under us. One redo, then take what we have rather than nagging.
+      if(attempt === 0 && here && best.local && here.local < 0.5*best.local){
+        log('refine  peak collapsed, repeating once');
+        continue;
+      }
+      const top = fine.reduce((a, b) => b.local > a.local ? b : a);
+      best = {d: top.d, local: top.local, fill: top.fill, server: best.server};
+      break;
+    }
+    await setFocus(best.d);
+  }
+
+  // 3. Light A/B. Flash preserves ridge detail but adds specular noise, and
+  //    which one wins is scene-dependent (Fusion2Print / FNF, 2026) — so
+  //    measure both, keep both, and let the server settle it.
+  //    Focus is searched first and the light second, rather than sweeping both
+  //    together: the light barely moves WHERE the peak is, only how strong it
+  //    is, so a joint search would cost twice the time for the same distance.
+  //    The found distance is re-applied after each torch change, because AE and
+  //    AF can drift when the scene brightness jumps.
+  let winner = null, loser = null;
+  if(hasTorch){
+    const opts = [];
+    for(const on of [false, true]){
+      $('shoot').textContent = on ? 'Light 2/2' : 'Light 1/2';
+      await setTorchTo(on);
+      if(useFocus && best) await setFocus(best.d);   // AE/AF can drift with the light
+      let m = await measure(B);
+      if(!m) throw new Error(lost);
+      // Blown highlights carry no ridges at all, so back the exposure off
+      // before judging the torch instead of judging it at its worst.
+      if(on && camCaps.exposureCompensation){
+        for(const ev of [-1, -2]){
+          if(m.clip <= MAX_CLIP) break;
+          await setEV(ev);
+          m = (await measure(B)) || m;
+        }
+      }
+      const v = await scoreTile(m.tile);
+      opts.push({torch: on, ev: evNow, local: m.metric, server: v, fill: m.fill, clip: m.clip});
+      log(`light   torch ${on ? 'on ' : 'off'} ev ${fmt(evNow,1)}  signal ${fmt(m.metric,1)}`
+        + `  ridge ${v == null ? '–' : fmt(v)}  clip ${fmt(m.clip*100,0)}%`);
+      say(`Testing the light — torch ${on ? 'on' : 'off'}, ridge `
+        + (v == null ? fmt(m.metric,1) : fmt(v)));
+    }
+    // The server's ridge score saturates at 1.00 on any good crop, so both
+    // lights tying is the NORMAL outcome, not a rare one — the local signal has
+    // to break it or the winner would just be whichever was measured first.
+    const bothServer = opts.every(o => o.server != null);
+    opts.sort((a, b) => (bothServer ? b.server - a.server : 0) || (b.local - a.local));
+    winner = opts[0]; loser = opts[1];
+    log(`light   winner torch ${winner.torch ? 'on' : 'off'}`
+      + (bothServer && opts[0].server === opts[1].server ? ' (scores tied, local signal decided)' : ''));
+  }else{
+    const m = await measure(B);
+    winner = {torch: torchOn, ev: evNow, local: m ? m.metric : null, fill: m ? m.fill : 0,
+              server: m ? await scoreTile(m.tile) : null};
+  }
+
+  // 4. Zoom. A crop-zoom adds no ridge detail by itself, but it enlarges the
+  //    thumb for segmentation and on phones whose HAL switches to a telephoto
+  //    past ~2x it is real magnification. Only worth trying when the lens
+  //    cannot focus any closer and the thumb is still small — and only when the
+  //    server is scoring, because the local signal assumes a fixed geometry and
+  //    is not comparable across zoom levels.
+  let zoomWon = null;
+  const nearLimit = useFocus && best
+    && best.d <= Math.max(camCaps.focusDistance.min || 0, SWEEP_NEAR_FLOOR_M) + step/2;
+  const roomToGain = winner.server != null && winner.server < 1 - ZOOM_WIN_MARGIN;
+  if(camCaps.zoom && useFocus && best && roomToGain && nearLimit && winner.fill < 0.70){
+    let baseline = winner.server;
+    const f = camCaps.focusDistance;
+    const near2 = Math.max(f.min || 0, SWEEP_NEAR_FLOOR_M), far2 = Math.min(f.max, 0.20);
+    for(const z of ZOOM_STEPS){
+      if(z < (camCaps.zoom.min || 1) || z > camCaps.zoom.max) continue;
+      if(Date.now() > deadline){ log('zoom    out of time, stopping'); break; }
+      $('shoot').textContent = `Zoom ${fmt(z,1)}×`;
+      say(`Trying ${fmt(z,1)}× zoom…`);
+      await setZoom(z);
+      let bz = null;
+      for(let i=0; i<6; i++){
+        await setFocus(1/(1/near2 - (1/near2 - 1/far2)*i/5));
+        const m = await measure(B);
+        if(!m) break;
+        if(!bz || m.metric > bz.local)
+          bz = {d: focusNow, local: m.metric, fill: m.fill, tile: m.tile};
+      }
+      if(!bz) continue;
+      const v = await scoreTile(bz.tile);
+      log(`zoom    ${fmt(z,1)}x  ${fmt(bz.d)}m  signal ${fmt(bz.local,1)}`
+        + `  ridge ${v == null ? '–' : fmt(v)}`);
+      if(v != null && v >= baseline + ZOOM_WIN_MARGIN){
+        baseline = v; zoomWon = z;
+        best = {d: bz.d, local: bz.local, fill: bz.fill, server: v};
+        winner.server = v;
+      }
+    }
+    await setZoom(zoomWon || entry.zoom);
+    if(useFocus && best) await setFocus(best.d);
+    log(`zoom    ${zoomWon ? 'kept ' + fmt(zoomWon,1) + 'x'
+                           : 'no gain, back to ' + fmt(entry.zoom,1) + 'x'}`);
+  }else if(camCaps.zoom){
+    log('zoom    skipped ('
+      + (!useFocus ? 'no focus control'
+        : winner.server == null ? 'no server score to compare'
+        : winner.server >= 1 - ZOOM_WIN_MARGIN ? 'ridge score already at the ceiling'
+        : !nearLimit ? 'peak is not at the lens near limit'
+        : 'thumb already fills the outline') + ')');
+  }
+
+  // 5. Shoot the pool the server chooses from. Diversity beats a single "best":
+  //    the focus neighbours cover a peak found through a shrunken tile, the
+  //    preview frames cover a takePhoto that softens or fails, and the other
+  //    light covers the flash/no-flash trade-off.
+  const parts = [];
+  const tagOf = (o, d) => `t${o.torch ? 1 : 0}_d${d == null ? 'na' : Math.round(d*1000)}`;
+  const dists = [];
+  if(useFocus && best){
+    for(const k of [0, -1, 1]){
+      const d = quantFocus(best.d + k*step);
+      if(!dists.some(x => Math.abs(x - d) < step/2)) dists.push(d);
+    }
+  }else{
+    dists.push(null);
+  }
+  const total = dists.length + 2 + (loser ? 1 : 0);
+  const shotSay = () => {
+    $('shoot').textContent = `Shot ${parts.length+1}/${total}`;
+    say(`Taking the photos — ${parts.length+1} of ${total}`);
+  };
+  await applyLight(winner);
+  for(const d of dists){
+    if(d != null) await setFocus(d);
+    shotSay();
+    const p = await part(tagOf(winner, d));
+    if(p) parts.push(p);
+  }
+  if(useFocus && best) await setFocus(best.d);
+  for(const suffix of ['a', 'b']){
+    if(suffix === 'b') await sleep(150);
+    shotSay();
+    const p = await grabPart(`frame_${tagOf(winner, best && best.d)}_${suffix}.jpg`);
+    if(p) parts.push(p);
+  }
+  if(loser){
+    await applyLight(loser);
+    if(useFocus && best) await setFocus(best.d);
+    shotSay();
+    const p = await part(tagOf(loser, best && best.d));
+    if(p) parts.push(p);
+  }
+  if(!parts.length) throw new Error('Could not capture a single frame.');
+  if(lastCamError) log(`camera  last complaint — ${lastCamError}`);
+  log(`parts   ${parts.map(p => p.name).join(', ')}`);
+  log(`total   ${fmt((performance.now()-t0)/1000,1)}s of camera work`);
+  return parts;
+}
+
+async function autoCapture(){
+  const entry = {torch: torchOn, zoom: zoomNow};
+  const B = box;                     // frozen: the sizer must not move it mid-run
+  trace = [];
+  const log = s => { trace.push(s); if(DEBUG) console.log('[auto] ' + s); };
+  const a = analyse();
+  if(!a) throw new Error('The camera is not ready yet.');
+  if(a.fill < MIN_FILL)
+    throw new Error('Move closer first — the thumb has to fill the outline.');
+  log(`start   ${video.videoWidth}x${video.videoHeight} · fill ${fmt(a.fill*100,0)}%`
+    + ` · luma ${fmt(a.luma,0)} · zoom ${fmt(zoomNow,1)}x · stills `
+    + (stillSize ? `${stillSize.w}x${stillSize.h}` : imageCapture ? 'preview size' : 'unavailable'));
+  // The exact capability values, because every focus failure is device-specific
+  // and this line is the only way to see what the phone actually reported.
+  log(`caps    focusDistance ${JSON.stringify(camCaps.focusDistance || null)}`
+    + ` · focusMode ${JSON.stringify(camCaps.focusMode || null)}`);
+  log(`caps    zoom ${JSON.stringify(camCaps.zoom || null)}`
+    + ` · ev ${JSON.stringify(camCaps.exposureCompensation || null)}`);
+  try{
+    return await autoSequence(B, entry, log);
+  }finally{
+    try{ await restoreCamera(entry); }catch(e){}
+  }
+}
+
+function traceHtml(){
+  if(!trace.length) return '';
+  return `<details class="trace"${DEBUG ? ' open' : ''}>`
+    + `<summary>▸ capture trace (${trace.length} lines)</summary>`
+    + `<pre>${esc(trace.join('\n'))}</pre></details>`;
+}
+
+// Every uploaded name states the settings that produced it, so the winner can
+// be read back in words.
+function wonLabel(n){
+  const m = /^(still|frame)_t([01])_d(\d+)/.exec(n || '');
+  if(!m) return '';
+  return `${m[1] === 'still' ? 'still' : 'preview frame'}, torch `
+       + `${m[2] === '1' ? 'on' : 'off'}, focus ${(+m[3]/10).toFixed(0)} cm`;
+}
+
+// --- Live ridge indicator -------------------------------------------------
+// Sends the outline region, at NATIVE stream resolution, to /v1/quality about
+// once a second and shows the score. This is the same measurement the server
+// gates on, so it answers the question the focus number cannot: "are there
+// ridges in there, or just a sharp-looking blur?".
+//
+// ADVISORY ONLY — it never disables the shutter. The page's rule is that a
+// blocking check must be reachable by holding still (see tick()), and on an
+// iPhone this one is not: with focus locked on the background there is no
+// hand movement that produces ridges. Sharp + no ridges is exactly when the
+// answer is "use the video button", so that is what it says.
+//
+// Cost: one ~150-250 KB POST per cycle at full resolution, which is ~10 MB a
+// minute of mobile data if it runs continuously. So it only polls while the
+// frame is worth scoring at all — thumb filling the outline, exposure sane —
+// which is also the only time the answer means anything. It must NOT be
+// downscaled to save bytes: ridges are 8-20 px apart and shrinking the tile
+// destroys the very thing being measured (see fingerphoto/frames.py).
+const RIDGE_MIN_MS = 900;
+let ridgeGate = 0.40, ridgeScore = null, ridgeStop = false, ridgeKey = '';
+let ridgeWorthIt = false;   // set by tick(): framing and light are good enough
+
+function cropCanvas(b){
+  const bx = b || box;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(!vw || !bx) return null;
+  const sx = Math.round(bx.x0*vw), sy = Math.round(bx.y0*vh);
+  const sw = Math.round((bx.x1-bx.x0)*vw), sh = Math.round((bx.y1-bx.y0)*vh);
+  if(sw < 32 || sh < 32) return null;
+  const c = document.createElement('canvas');
+  c.width = sw; c.height = sh;
+  c.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+  return c;
+}
+
+async function ridgeLoop(){
+  for(;;){
+    await new Promise(r => setTimeout(r, RIDGE_MIN_MS));
+    const key = $('key').value.trim();
+    if(key !== ridgeKey){ ridgeKey = key; ridgeStop = false; }   // new key, try again
+    if(busy || ridgeStop || !key || !video.videoWidth || !ridgeWorthIt){
+      if(!ridgeWorthIt) ridgeScore = null;   // stale score would mislead
+      continue;
+    }
+    const c = cropCanvas();
+    if(!c) continue;
+    try{
+      const blob = await new Promise(res => c.toBlob(b=>res(b), 'image/jpeg', 0.9));
+      const fd = new FormData();
+      fd.append('file', blob, 'frame.jpg');
+      const r = await fetch('/v1/quality', {method:'POST', headers:{'X-API-Key':key}, body:fd});
+      if(r.status === 401){ ridgeStop = true; ridgeScore = null; continue; }
+      if(!r.ok){ ridgeScore = null; continue; }
+      const j = await r.json();
+      ridgeScore = j.score;
+      if(typeof j.min_ridge_quality === 'number') ridgeGate = j.min_ridge_quality;
+    }catch(e){ ridgeScore = null; }
   }
 }
 
@@ -548,12 +1465,30 @@ function resize(mult){
   silhouettePath();
 }
 
-$('shoot').addEventListener('click', ()=>capture());
+$('shoot').addEventListener('click', ()=>capture(null, adaptive ? 'auto' : 'burst'));
 $('upload').addEventListener('click', ()=>$('pick').click());
 $('pick').addEventListener('change', e => {
   const f = e.target.files[0];
   e.target.value = '';              // so re-picking the same file still fires
-  if(f) capture(async () => [f, f.name || 'photo.jpg']);
+  if(f) capture(async () => [f, f.name || 'photo.jpg'], 'photo');
+});
+$('uploadvid').addEventListener('click', ()=>$('pickvid').click());
+$('pickvid').addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if(f) capture(async () => [f, f.name || 'clip.mov'], 'video');
+});
+$('torch').addEventListener('click', toggleTorch);
+// Manual zoom, for framing. The auto sequence starts from whatever is set here
+// and puts it back afterwards.
+$('zoom').addEventListener('click', async ()=>{
+  const zc = camCaps.zoom;
+  if(!zc || busy) return;
+  const opts = [1, 1.5, 2, 3].filter(z => z >= (zc.min||1) && z <= zc.max);
+  if(!opts.length) return;
+  const i = opts.findIndex(z => Math.abs(z - zoomNow) < 0.05);
+  userZoom = opts[(i + 1) % opts.length];
+  await setZoom(userZoom);
 });
 $('bigger').addEventListener('click', ()=>resize(1.18));
 $('smaller').addEventListener('click', ()=>resize(1/1.18));
@@ -567,6 +1502,8 @@ video.addEventListener('loadedmetadata', layout);
 addEventListener('resize', layout);
 addEventListener('orientationchange', ()=>setTimeout(layout, 300));
 start().then(listCams);
+ridgeKey = $('key').value.trim();
+ridgeLoop();
 </script>
 </body>
 </html>
