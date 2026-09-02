@@ -19,6 +19,7 @@ CODE_STATUS = {
     ReasonCode.IDENTITY_EXISTS: 409,
     ReasonCode.IMAGE_TOO_LARGE: 413,
     ReasonCode.UNSUPPORTED_MEDIA_TYPE: 415,
+    ReasonCode.VIDEO_UNREADABLE: 415,
     ReasonCode.QUEUE_FULL: 503,
     ReasonCode.INTERNAL_ERROR: 500,
 }  # everything else (quality gates, consent, empty gallery, ...) -> 422

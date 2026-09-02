@@ -91,7 +91,13 @@ def _migrate_v1(con: sqlite3.Connection) -> None:
     con.execute("CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)")
 
 
-MIGRATIONS = [_migrate_v1]
+def _migrate_v2(con: sqlite3.Connection) -> None:
+    """Ridge-quality score of the crop each template came from (pipeline 1.2.0)."""
+    if "quality" not in _columns(con, "templates"):
+        con.execute("ALTER TABLE templates ADD COLUMN quality REAL")
+
+
+MIGRATIONS = [_migrate_v1, _migrate_v2]
 
 
 def migrate(con: sqlite3.Connection) -> None:

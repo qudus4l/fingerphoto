@@ -54,6 +54,10 @@ cat <<EOF
   Enter a name and that key, fill the outline with your thumb,
   and capture. Enroll 2-3 photos per person before identifying.
 
+  On an iPhone, use "Record a 3-5 s video in the Camera app": it is the
+  only route with flash, tap-to-focus and 4K at once. The server scores
+  every frame and keeps the best few. A 4K clip is 15-35 MB to upload.
+
   Docs:   $URL/docs
   Logs:   /tmp/fingerphoto-api.log
 ────────────────────────────────────────────────────────────

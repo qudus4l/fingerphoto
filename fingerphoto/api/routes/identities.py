@@ -9,7 +9,7 @@ from ... import store
 from ...errors import ReasonCode, StoreError
 from ..logging import request_id_var
 from ..schemas import FingerPosition, IdentityIn, IdentityOut, JobSubmitted
-from ._uploads import accepted, decoded_uploads
+from ._uploads import accepted, read_uploads
 
 router = APIRouter()
 
@@ -43,6 +43,7 @@ async def enroll_photos(
     request: Request,
     files: Annotated[list[UploadFile], File()],
     finger: Annotated[FingerPosition, Form()] = "unknown",
+    best_of: Annotated[int | None, Form(ge=1, le=10)] = None,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     info = store.get_identity(identity_uuid)  # 404 before decoding anything
@@ -51,11 +52,12 @@ async def enroll_photos(
             ReasonCode.CONSENT_REQUIRED,
             "identity has no recorded consent; re-create it with consent before enrolling",
         )
-    photos = await decoded_uploads(files)  # 415/422 before taking a job slot
+    photos = await read_uploads(files)  # 415/422 before taking a job slot
     rid = request_id_var.get()
     job = request.app.state.jobs.submit(
         "enroll",
-        lambda: store.enroll_photos(identity_uuid, photos, finger=finger, request_id=rid),
+        lambda: store.enroll_photos(identity_uuid, photos, finger=finger,
+                                    request_id=rid, best_of=best_of),
         idempotency_key=idempotency_key,
     )
     return accepted(job)

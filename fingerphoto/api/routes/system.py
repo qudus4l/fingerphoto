@@ -65,4 +65,8 @@ def version_info() -> VersionOut:
         sourceafis=version.sourceafis_version(),
         threshold=settings.threshold,
         min_minutiae=settings.min_minutiae,
+        min_ridge_quality=settings.min_ridge_quality,
+        video_frames_enroll=settings.video_frames_enroll,
+        video_frames_identify=settings.video_frames_identify,
+        max_upload_mb=settings.max_upload_mb,
     )

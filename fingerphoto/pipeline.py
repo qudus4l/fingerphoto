@@ -10,6 +10,14 @@ Priesnitz 2022):
   6. oriented Gabor enhancement (Hong 1998 via fingerprint_enhancer)
   7. polarity fix: dark ridges on white for SourceAFIS
 
+`info` also carries the ridge-quality measurement of the winning iteration
+(quality.ridge_quality on the scale-normalized grayscale, BEFORE enhancement --
+the enhancer invents ridges from blur, so a later measurement proves nothing)
+plus the period-band diagnostics the caller's sanity rules need:
+period_band_px, period_clamped (the seed estimate fell outside the physical
+band for this crop width) and period_at_band_edge (the loop was still pushing
+against a limit when it stopped).
+
 Scale runs closed-loop: the raw-skin period estimate can be pulled off by
 creases/specular highlights, so after enhancement we re-measure the period on
 the (much cleaner) binary ridge map and correct until it hits TARGET_PERIOD.
@@ -21,10 +29,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .quality import ridge_quality
 from .scale import TARGET_PERIOD, estimate_ridge_period, normalize_scale
 
 MAX_SCALE_ITERATIONS = 3
 PERIOD_TOLERANCE = 0.6  # px, on the enhanced map
+BAND_EDGE_TOL = 0.02  # fraction of the band limit that still counts as "at the edge"
 
 
 def photo_to_ridge_image(
@@ -34,6 +44,7 @@ def photo_to_ridge_image(
     mask: np.ndarray | None = None,
     period: float | None = None,
     initial_period: float | None = None,
+    quality: bool = True,
 ) -> tuple[np.ndarray, dict]:
     """Returns (ridge_image, info). ridge_image is uint8, dark ridges on white,
     pseudo-500dpi. If out_dir is set, intermediate stages are saved there.
@@ -57,6 +68,7 @@ def photo_to_ridge_image(
         else:
             period = estimate_ridge_period(gray)
     info["initial_period_px"] = round(period, 2)
+    seed_period = period  # kept pre-clamp: the band test below compares against it
 
     # The closed loop may only refine WITHIN the physical prior. The correction
     # below used to be unbounded, and period_band constrained only the initial
@@ -72,10 +84,11 @@ def photo_to_ridge_image(
 
     # Keep the iteration that landed CLOSEST to target, not the most recent —
     # a diverging loop's last step is its worst.
-    best: tuple[float, np.ndarray, float, float, tuple, np.ndarray, np.ndarray] | None = None
+    best: tuple | None = None
     for attempt in range(1, MAX_SCALE_ITERATIONS + 1):
         period = min(max(period, lo), hi)
         scaled, factor = normalize_scale(gray, period)
+        scaled_mask = _scaled_mask(mask, scaled.shape)
 
         inv = 255 - scaled
         smooth = cv2.bilateralFilter(inv, d=2, sigmaColor=4, sigmaSpace=1)
@@ -89,17 +102,11 @@ def photo_to_ridge_image(
                 break  # keep the best earlier iteration
             raise
 
-        if mask is not None:
-            scaled_mask = cv2.resize(
-                mask, (scaled.shape[1], scaled.shape[0]), interpolation=cv2.INTER_NEAREST
-            )
-            # erode ~2 ridge periods so the boundary contour itself is wiped out
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
-            scaled_mask = cv2.erode(scaled_mask, k)
+        if scaled_mask is not None:
             enhanced[scaled_mask == 0] = 255  # white = valley/background
 
         if forced:
-            best = (0.0, enhanced, period, factor, scaled.shape, scaled, contrasted)
+            best = (0.0, enhanced, period, factor, scaled.shape, scaled, contrasted, scaled_mask)
             break
         try:
             achieved = estimate_ridge_period(
@@ -107,11 +114,12 @@ def photo_to_ridge_image(
             )
         except ValueError:
             if best is None:
-                best = (float("inf"), enhanced, period, factor, scaled.shape, scaled, contrasted)
+                best = (float("inf"), enhanced, period, factor, scaled.shape, scaled,
+                        contrasted, scaled_mask)
             break
         err = abs(achieved - TARGET_PERIOD)
         if best is None or err < best[0]:
-            best = (err, enhanced, period, factor, scaled.shape, scaled, contrasted)
+            best = (err, enhanced, period, factor, scaled.shape, scaled, contrasted, scaled_mask)
             info["achieved_period_px"] = round(achieved, 2)
         if err <= PERIOD_TOLERANCE:
             break
@@ -120,7 +128,7 @@ def photo_to_ridge_image(
             break  # the correction wants to leave the physical band — stop
         period = nxt
 
-    err, enhanced, period, factor, shape, scaled, contrasted = best
+    err, enhanced, period, factor, shape, scaled, contrasted, scaled_mask = best
     info["ridge_period_px"] = round(period, 2)
     info["scale_factor"] = round(factor, 4)
     info["scale_iterations"] = attempt
@@ -128,11 +136,34 @@ def photo_to_ridge_image(
     # Did the loop actually reach the target? Callers (and the quality gate)
     # need to know that a template came from an unconverged scale estimate.
     info["scale_converged"] = bool(err <= PERIOD_TOLERANCE)
+    # Band diagnostics for the caller's crop-sanity rules. A seed outside the
+    # physical band means the crop is not a fingertip (a whole hand gives a
+    # period the band cannot contain); landing on a limit means the loop was
+    # still pushing outwards when it ran out of room.
+    info["period_band_px"] = (round(lo, 2), round(hi, 2))
+    info["period_clamped"] = bool(seed_period < lo or seed_period > hi)
+    info["period_at_band_edge"] = bool(
+        period <= lo * (1 + BAND_EDGE_TOL) or period >= hi * (1 - BAND_EDGE_TOL)
+    )
+    if quality:
+        info["quality"] = ridge_quality(scaled, scaled_mask).as_dict()
     _save(out_dir, "2_scaled.png", scaled)
     _save(out_dir, "3_contrast.png", contrasted)
     _save(out_dir, "4_enhanced.png", enhanced)
 
     return enhanced, info
+
+
+def _scaled_mask(mask: np.ndarray | None, shape: tuple[int, int]) -> np.ndarray | None:
+    """Crop mask at the normalized scale, eroded ~2 ridge periods so the mask
+    boundary itself cannot spawn ridges or minutiae. One helper, used both to
+    blank the enhanced map and to bound the quality measurement, so the two can
+    never drift apart."""
+    if mask is None:
+        return None
+    out = cv2.resize(mask, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+    return cv2.erode(out, k)
 
 
 def _gabor_enhance(gray: np.ndarray) -> np.ndarray:

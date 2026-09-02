@@ -35,6 +35,8 @@ def test_migrates_legacy_v0(tmp_path):
         "SELECT pipeline_version, sourceafis_version, enc FROM templates"
     ).fetchone()
     assert (pv, sv, enc) == ("pre-1.0", "3.18.1", None)
+    assert "quality" in db._columns(con, "templates")  # v2: null on legacy rows
+    assert con.execute("SELECT quality FROM templates").fetchone()[0] is None
     assert con.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == 0
     con.close()
 
@@ -56,4 +58,5 @@ def test_fresh_database(tmp_path):
     db.migrate(con)
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"identities", "templates", "audit_log"} <= tables
+    assert "quality" in db._columns(con, "templates")
     con.close()

@@ -1,0 +1,1000 @@
+{
+ "meta": {
+  "created_at": "2026-09-01T22:55:39",
+  "pipeline_version": "1.2.0",
+  "sourceafis_version": "3.18.1",
+  "code_hash": "8cabaa826a71",
+  "threshold": 40.0,
+  "min_ridge_quality": 0.4,
+  "min_minutiae": 15,
+  "manifest": "/Users/Q_1/Projects/fingerphoto/data/samples/manifest.csv",
+  "n_photos": 17,
+  "n_labelled": 12,
+  "n_unknown": 5,
+  "cache_hits": 0,
+  "extract_total_s": 195.3,
+  "distractors": [
+   "fvc-101",
+   "fvc-102",
+   "fvc-103",
+   "fvc-104",
+   "fvc-105",
+   "fvc-106",
+   "fvc-107",
+   "fvc-108",
+   "fvc-109",
+   "fvc-110"
+  ]
+ },
+ "photos": [
+  {
+   "name": "thumb_6172",
+   "subject": "Q",
+   "finger": "right_thumb",
+   "key": "Q/right_thumb",
+   "source": "camera_app",
+   "gallery": true,
+   "status": "ok",
+   "error_code": null,
+   "templates": 6,
+   "minutiae_max": 100,
+   "minutiae": [
+    100,
+    100,
+    89,
+    100,
+    100,
+    78
+   ],
+   "quality": 0.952,
+   "rejections": {},
+   "extract_s": 20.34,
+   "cached": false,
+   "best_genuine": 194.6,
+   "best_genuine_vs": "thumb_6173",
+   "best_impostor": 18.2,
+   "best_impostor_vs": "sister_6214",
+   "loo_predicted": "Q/right_thumb",
+   "loo_score": 194.6,
+   "loo_rank": 1,
+   "loo_outcome": "correct",
+   "verdict": "pass"
+  },
+  {
+   "name": "thumb_6173",
+   "subject": "Q",
+   "finger": "right_thumb",
+   "key": "Q/right_thumb",
+   "source": "camera_app",
+   "gallery": false,
+   "status": "ok",
+   "error_code": null,
+   "templates": 3,
+   "minutiae_max": 100,
+   "minutiae": [
+    100,
+    88,
+    65
+   ],
+   "quality": 0.948,
+   "rejections": {
+    "pad": "period_outside_band"
+   },
+   "extract_s": 13.68,
+   "cached": false,
+   "best_genuine": 193.5,
+   "best_genuine_vs": "thumb_6172",
+   "best_impostor": 10.6,
+   "best_impostor_vs": "fingertip_macro",
+   "loo_predicted": "Q/right_thumb",
+   "loo_score": 193.5,
+   "loo_rank": 1,
+   "loo_outcome": "correct",
+   "verdict": "pass"
+  },
+  {
+   "name": "thumb_6174",
+   "subject": "Q",
+   "finger": "right_thumb",
+   "key": "Q/right_thumb",
+   "source": "camera_app",
+   "gallery": true,
+   "status": "ok",
+   "error_code": null,
+   "templates": 6,
+   "minutiae_max": 100,
+   "minutiae": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    92
+   ],
+   "quality": 1.0,
+   "rejections": {},
+   "extract_s": 18.33,
+   "cached": false,
+   "best_genuine": 144.2,
+   "best_genuine_vs": "thumb_6173",
+   "best_impostor": 14.2,
+   "best_impostor_vs": "fingertip_macro",
+   "loo_predicted": "Q/right_thumb",
+   "loo_score": 144.2,
+   "loo_rank": 1,
+   "loo_outcome": "correct",
+   "verdict": "pass"
+  },
+  {
+   "name": "thumb_6217",
+   "subject": "Q",
+   "finger": "right_thumb",
+   "key": "Q/right_thumb",
+   "source": "camera_app",
+   "gallery": false,
+   "status": "ok",
+   "error_code": null,
+   "templates": 3,
+   "minutiae_max": 100,
+   "minutiae": [
+    100,
+    100,
+    87
+   ],
+   "quality": 0.83,
+   "rejections": {
+    "distal": "ridge_quality"
+   },
+   "extract_s": 10.61,
+   "cached": false,
+   "best_genuine": 25.2,
+   "best_genuine_vs": "thumb_6174",
+   "best_impostor": 21.8,
+   "best_impostor_vs": "sister_6214",
+   "loo_predicted": "Q/right_thumb",
+   "loo_score": 25.2,
+   "loo_rank": 1,
+   "loo_outcome": "rejected",
+   "verdict": "false_nonmatch"
+  },
+  {
+   "name": "sister_6214",
+   "subject": "Sister",
+   "finger": "right_thumb",
+   "key": "Sister/right_thumb",
+   "source": "camera_app",
+   "gallery": true,
+   "status": "ok",
+   "error_code": null,
+   "templates": 6,
+   "minutiae_max": 100,
+   "minutiae": [
+    100,
+    87,
+    62,
+    100,
+    73,
+    55
+   ],
+   "quality": 0.751,
+   "rejections": {},
+   "extract_s": 20.63,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": 16.0,
+   "best_impostor_vs": "fingertip_macro",
+   "loo_predicted": "macro/thumb",
+   "loo_score": 16.0,
+   "loo_rank": null,
+   "loo_outcome": "no_mate",
+   "verdict": "no_mate"
+  },
+  {
+   "name": "sister_6175",
+   "subject": "Sister",
+   "finger": "right_thumb",
+   "key": "Sister/right_thumb",
+   "source": "camera_app",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "ridge_quality"
+   },
+   "extract_s": 8.46,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "sister_6176",
+   "subject": "Sister",
+   "finger": "right_thumb",
+   "key": "Sister/right_thumb",
+   "source": "camera_app",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "period_at_band_edge"
+   },
+   "extract_s": 8.8,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "sis_finger_a",
+   "subject": "Sister",
+   "finger": "right_index",
+   "key": "Sister/right_index",
+   "source": "camera_app",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "ridge_quality"
+   },
+   "extract_s": 4.15,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "sis_finger_b",
+   "subject": "Sister",
+   "finger": "right_index",
+   "key": "Sister/right_index",
+   "source": "camera_app",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "ridge_quality"
+   },
+   "extract_s": 12.15,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "fingertip_macro",
+   "subject": "macro",
+   "finger": "thumb",
+   "key": "macro/thumb",
+   "source": "macro",
+   "gallery": false,
+   "status": "ok",
+   "error_code": null,
+   "templates": 3,
+   "minutiae_max": 29,
+   "minutiae": [
+    27,
+    29,
+    19
+   ],
+   "quality": 0.687,
+   "rejections": {},
+   "extract_s": 4.63,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": 20.6,
+   "best_impostor_vs": "thumb_6174",
+   "loo_predicted": "Q/right_thumb",
+   "loo_score": 20.6,
+   "loo_rank": null,
+   "loo_outcome": "no_mate",
+   "verdict": "no_mate"
+  },
+  {
+   "name": "web_w_capture",
+   "subject": "W",
+   "finger": "right_thumb",
+   "key": "W/right_thumb",
+   "source": "web_burst",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "period_outside_band"
+   },
+   "extract_s": 15.93,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "web_qd_capture",
+   "subject": "QD",
+   "finger": "right_thumb",
+   "key": "QD/right_thumb",
+   "source": "web_burst",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "period_outside_band"
+   },
+   "extract_s": 10.05,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "20260831-193348_nomatch-6",
+   "subject": "unknown",
+   "finger": "unknown",
+   "key": null,
+   "source": "web_burst",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "ridge_quality"
+   },
+   "extract_s": 5.88,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "20260831-195511_nomatch-17",
+   "subject": "unknown",
+   "finger": "unknown",
+   "key": null,
+   "source": "web_burst",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "ridge_quality"
+   },
+   "extract_s": 6.97,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "20260831-202624_nomatch-26",
+   "subject": "unknown",
+   "finger": "unknown",
+   "key": null,
+   "source": "web_burst",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "ridge_quality",
+    "pad": "ridge_quality"
+   },
+   "extract_s": 11.55,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "20260831-203000_match-64",
+   "subject": "unknown",
+   "finger": "unknown",
+   "key": null,
+   "source": "web_burst",
+   "gallery": false,
+   "status": "fta",
+   "error_code": "QUALITY_TOO_LOW",
+   "templates": 0,
+   "minutiae_max": null,
+   "minutiae": [],
+   "quality": 0.0,
+   "rejections": {
+    "distal": "period_at_band_edge",
+    "pad": "period_outside_band"
+   },
+   "extract_s": 9.32,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "fta"
+  },
+  {
+   "name": "20260831-211132_match-194",
+   "subject": "unknown",
+   "finger": "unknown",
+   "key": null,
+   "source": "camera_upload",
+   "gallery": false,
+   "status": "ok",
+   "error_code": null,
+   "templates": 3,
+   "minutiae_max": 100,
+   "minutiae": [
+    100,
+    100,
+    89
+   ],
+   "quality": 0.953,
+   "rejections": {
+    "pad": "period_outside_band"
+   },
+   "extract_s": 13.8,
+   "cached": false,
+   "best_genuine": null,
+   "best_genuine_vs": null,
+   "best_impostor": null,
+   "best_impostor_vs": null,
+   "loo_predicted": null,
+   "loo_score": null,
+   "loo_rank": null,
+   "loo_outcome": null,
+   "verdict": "probe"
+  }
+ ],
+ "pairs": [
+  {
+   "probe": "thumb_6172",
+   "gallery": "thumb_6173",
+   "genuine": true,
+   "set_max": 194.56112739703315,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6172",
+   "gallery": "thumb_6174",
+   "genuine": true,
+   "set_max": 153.84424670943082,
+   "n_probe": 6,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6172",
+   "gallery": "thumb_6217",
+   "genuine": true,
+   "set_max": 10.268437414019711,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6172",
+   "gallery": "sister_6214",
+   "genuine": false,
+   "set_max": 18.20354557039993,
+   "n_probe": 6,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6172",
+   "gallery": "fingertip_macro",
+   "genuine": false,
+   "set_max": 5.309209748339837,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6173",
+   "gallery": "thumb_6172",
+   "genuine": true,
+   "set_max": 193.54290851156415,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6173",
+   "gallery": "thumb_6174",
+   "genuine": true,
+   "set_max": 125.84999982373787,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6173",
+   "gallery": "thumb_6217",
+   "genuine": true,
+   "set_max": 3.435364282659318,
+   "n_probe": 3,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6173",
+   "gallery": "sister_6214",
+   "genuine": false,
+   "set_max": 10.605442796695202,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6173",
+   "gallery": "fingertip_macro",
+   "genuine": false,
+   "set_max": 10.646320909524883,
+   "n_probe": 3,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6174",
+   "gallery": "thumb_6172",
+   "genuine": true,
+   "set_max": 137.08878190313268,
+   "n_probe": 6,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6174",
+   "gallery": "thumb_6173",
+   "genuine": true,
+   "set_max": 144.2321438871928,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6174",
+   "gallery": "thumb_6217",
+   "genuine": true,
+   "set_max": 25.22969507561767,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6174",
+   "gallery": "sister_6214",
+   "genuine": false,
+   "set_max": 11.700646327254226,
+   "n_probe": 6,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6174",
+   "gallery": "fingertip_macro",
+   "genuine": false,
+   "set_max": 14.186946871478872,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6217",
+   "gallery": "thumb_6172",
+   "genuine": true,
+   "set_max": 12.679596315334166,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6217",
+   "gallery": "thumb_6173",
+   "genuine": true,
+   "set_max": 6.831515585787878,
+   "n_probe": 3,
+   "n_gallery": 3
+  },
+  {
+   "probe": "thumb_6217",
+   "gallery": "thumb_6174",
+   "genuine": true,
+   "set_max": 25.22969507561767,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6217",
+   "gallery": "sister_6214",
+   "genuine": false,
+   "set_max": 21.815429174277334,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "thumb_6217",
+   "gallery": "fingertip_macro",
+   "genuine": false,
+   "set_max": 18.702313936297493,
+   "n_probe": 3,
+   "n_gallery": 3
+  },
+  {
+   "probe": "sister_6214",
+   "gallery": "thumb_6172",
+   "genuine": false,
+   "set_max": 15.151159632460558,
+   "n_probe": 6,
+   "n_gallery": 6
+  },
+  {
+   "probe": "sister_6214",
+   "gallery": "thumb_6173",
+   "genuine": false,
+   "set_max": 5.822207774484057,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "sister_6214",
+   "gallery": "thumb_6174",
+   "genuine": false,
+   "set_max": 14.711695928081,
+   "n_probe": 6,
+   "n_gallery": 6
+  },
+  {
+   "probe": "sister_6214",
+   "gallery": "thumb_6217",
+   "genuine": false,
+   "set_max": 15.574467555466525,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "sister_6214",
+   "gallery": "fingertip_macro",
+   "genuine": false,
+   "set_max": 15.988021387666553,
+   "n_probe": 6,
+   "n_gallery": 3
+  },
+  {
+   "probe": "fingertip_macro",
+   "gallery": "thumb_6172",
+   "genuine": false,
+   "set_max": 6.623217302022128,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "fingertip_macro",
+   "gallery": "thumb_6173",
+   "genuine": false,
+   "set_max": 10.646320909524883,
+   "n_probe": 3,
+   "n_gallery": 3
+  },
+  {
+   "probe": "fingertip_macro",
+   "gallery": "thumb_6174",
+   "genuine": false,
+   "set_max": 20.58205546516517,
+   "n_probe": 3,
+   "n_gallery": 6
+  },
+  {
+   "probe": "fingertip_macro",
+   "gallery": "thumb_6217",
+   "genuine": false,
+   "set_max": 13.561848705788282,
+   "n_probe": 3,
+   "n_gallery": 3
+  },
+  {
+   "probe": "fingertip_macro",
+   "gallery": "sister_6214",
+   "genuine": false,
+   "set_max": 15.91957609264433,
+   "n_probe": 3,
+   "n_gallery": 6
+  }
+ ],
+ "set_max": {
+  "n_genuine": 12,
+  "n_impostor": 18,
+  "genuine": {
+   "n": 12,
+   "min": 3.44,
+   "median": 75.54,
+   "mean": 86.07,
+   "max": 194.56
+  },
+  "impostor": {
+   "n": 18,
+   "min": 5.31,
+   "median": 14.45,
+   "mean": 13.65,
+   "max": 21.82
+  },
+  "fmr": 0.0,
+  "fnmr": 0.5,
+  "eer": 0.3333,
+  "eer_threshold": 15.65,
+  "dprime": 1.37
+ },
+ "per_template": {
+  "n_genuine": 234,
+  "n_impostor": 360,
+  "genuine": {
+   "n": 234,
+   "min": 0.0,
+   "median": 4.18,
+   "mean": 23.97,
+   "max": 194.56
+  },
+  "impostor": {
+   "n": 360,
+   "min": 0.0,
+   "median": 2.66,
+   "mean": 4.15,
+   "max": 21.82
+  },
+  "fmr": 0.0,
+  "fnmr": 0.8034,
+  "eer": 0.4389,
+  "eer_threshold": 3.13,
+  "dprime": 0.69,
+  "inflation_max_impostor": 0.0
+ },
+ "identification": {
+  "n_probes": 6,
+  "n_with_mate": 4,
+  "correct": 3,
+  "rejected": 1,
+  "wrong": 0,
+  "no_mate": 2,
+  "rank1": 4,
+  "rank1_rate": 0.75,
+  "rank1_rate_any_threshold": 1.0
+ },
+ "loo": [
+  {
+   "name": "thumb_6172",
+   "key": "Q/right_thumb",
+   "predicted": "Q/right_thumb",
+   "score": 194.6,
+   "genuine_score": 194.6,
+   "rank": 1,
+   "outcome": "correct"
+  },
+  {
+   "name": "thumb_6173",
+   "key": "Q/right_thumb",
+   "predicted": "Q/right_thumb",
+   "score": 193.5,
+   "genuine_score": 193.5,
+   "rank": 1,
+   "outcome": "correct"
+  },
+  {
+   "name": "thumb_6174",
+   "key": "Q/right_thumb",
+   "predicted": "Q/right_thumb",
+   "score": 144.2,
+   "genuine_score": 144.2,
+   "rank": 1,
+   "outcome": "correct"
+  },
+  {
+   "name": "thumb_6217",
+   "key": "Q/right_thumb",
+   "predicted": "Q/right_thumb",
+   "score": 25.2,
+   "genuine_score": 25.2,
+   "rank": 1,
+   "outcome": "rejected"
+  },
+  {
+   "name": "sister_6214",
+   "key": "Sister/right_thumb",
+   "predicted": "macro/thumb",
+   "score": 16.0,
+   "genuine_score": null,
+   "rank": null,
+   "outcome": "no_mate"
+  },
+  {
+   "name": "fingertip_macro",
+   "key": "macro/thumb",
+   "predicted": "Q/right_thumb",
+   "score": 20.6,
+   "genuine_score": null,
+   "rank": null,
+   "outcome": "no_mate"
+  }
+ ],
+ "unknown_probes": [
+  {
+   "name": "20260831-193348_nomatch-6",
+   "source": "web_burst",
+   "best": null,
+   "score": null,
+   "matched": null,
+   "error_code": "QUALITY_TOO_LOW"
+  },
+  {
+   "name": "20260831-195511_nomatch-17",
+   "source": "web_burst",
+   "best": null,
+   "score": null,
+   "matched": null,
+   "error_code": "QUALITY_TOO_LOW"
+  },
+  {
+   "name": "20260831-202624_nomatch-26",
+   "source": "web_burst",
+   "best": null,
+   "score": null,
+   "matched": null,
+   "error_code": "QUALITY_TOO_LOW"
+  },
+  {
+   "name": "20260831-203000_match-64",
+   "source": "web_burst",
+   "best": null,
+   "score": null,
+   "matched": null,
+   "error_code": "QUALITY_TOO_LOW"
+  },
+  {
+   "name": "20260831-211132_match-194",
+   "source": "camera_upload",
+   "best": "Q/right_thumb",
+   "score": 257.9,
+   "matched": true,
+   "error_code": null
+  }
+ ],
+ "fta": {
+  "count": 10,
+  "rate": 0.8333,
+  "photos": [
+   {
+    "name": "sister_6175",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.00 (coherence 0.42, edges 0.265, spectral 0.00, period 43.43 px, reason ridge_quality); pad score 0.04 (coherence 0.23, edges 0.142, spectral 0.09, period 25.2 px, reason ridge_quality). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "sister_6176",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.01 (coherence 0.31, edges 0.295, spectral 0.06, period 14.67 px, reason ridge_quality); pad score 0.00 (coherence 0.05, edges 0.363, spectral 0.03, period 11.99 px, reason period_at_band_edge). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "sis_finger_a",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.00 (coherence 0.50, edges 0.072, spectral 0.00, period 44.29 px, reason ridge_quality); pad score 0.00 (coherence 0.14, edges 0.015, spectral 0.05, period 15.12 px, reason ridge_quality). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "sis_finger_b",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.00 (coherence 0.36, edges 0.091, spectral 0.00, period 39.75 px, reason ridge_quality); pad score 0.00 (coherence 0.32, edges 0.048, spectral 0.00, period 24.0 px, reason ridge_quality). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "web_w_capture",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.33 (coherence 0.27, edges 0.084, spectral 0.29, period 15.33 px, reason ridge_quality); pad score 0.00 (coherence 0.55, edges 0.204, spectral 0.00, period 36.32 px, reason period_outside_band). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "web_qd_capture",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.27 (coherence 0.27, edges 0.104, spectral 0.25, period 23.78 px, reason ridge_quality); pad score 0.00 (coherence 0.10, edges 0.033, spectral 0.08, period 20.02 px, reason period_outside_band). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "20260831-193348_nomatch-6",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.04 (coherence 0.39, edges 0.042, spectral 0.10, period 26.0 px, reason ridge_quality); pad score 0.00 (coherence 0.09, edges 0.014, spectral 0.03, period 16.8 px, reason ridge_quality). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "20260831-195511_nomatch-17",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.00 (coherence 0.31, edges 0.027, spectral 0.00, period 21.33 px, reason ridge_quality); pad score 0.00 (coherence 0.23, edges 0.025, spectral 0.03, period 16.8 px, reason ridge_quality). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "20260831-202624_nomatch-26",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.03 (coherence 0.28, edges 0.051, spectral 0.08, period 30.25 px, reason ridge_quality); pad score 0.07 (coherence 0.29, edges 0.052, spectral 0.13, period 23.67 px, reason ridge_quality). Move closer, tap the fingertip to focus, and add light."
+   },
+   {
+    "name": "20260831-203000_match-64",
+    "error_code": "QUALITY_TOO_LOW",
+    "error": "no resolvable ridge structure in any crop (min score 0.4): distal score 0.00 (coherence 0.45, edges 0.124, spectral 0.00, period 40.92 px, reason period_at_band_edge); pad score 0.11 (coherence 0.40, edges 0.078, spectral 0.10, period 23.22 px, reason period_outside_band). Move closer, tap the fingertip to focus, and add light."
+   }
+  ]
+ }
+}

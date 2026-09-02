@@ -76,6 +76,7 @@ def test_full_lifecycle(client):
     job = _poll(client, r.json()["job_id"])
     assert job["status"] == "succeeded"
     assert all(p["status"] == "enrolled" for p in job["result"]["results"])
+    assert all(p["quality"] >= 0.4 for p in job["result"]["results"])
 
     r = client.post("/v1/identify", files={"file": _upload("thumb_6173")}, headers=KEY)
     job = _poll(client, r.json()["job_id"])
@@ -83,11 +84,98 @@ def test_full_lifecycle(client):
     assert job["result"]["match"]["score"] >= 100
 
     r = client.post(
-        f"/v1/identities/{uid}/verify", files={"file": _upload("sister_6176")}, headers=KEY
+        f"/v1/identities/{uid}/verify", files={"file": _upload("sister_6214")}, headers=KEY
     )
     job = _poll(client, r.json()["job_id"])
     assert job["result"]["verified"] is False and job["result"]["score"] < 40
 
+    # a photo with no resolvable ridges is refused, not silently scored low
+    r = client.post(
+        f"/v1/identities/{uid}/verify", files={"file": _upload("sister_6176")}, headers=KEY
+    )
+    job = _poll(client, r.json()["job_id"])
+    assert job["status"] == "failed"
+    assert job["error"]["reason_code"] == "QUALITY_TOO_LOW"
+    assert "no resolvable ridge" in job["error"]["detail"]
+
     r = client.delete(f"/v1/identities/{uid}", headers=KEY)
     assert r.status_code == 200
     assert client.get(f"/v1/identities/{uid}", headers=KEY).status_code == 404
+
+
+def _clip_from(paths, tmp, fps=30, per=30, size=(1080, 1920)):
+    """A clip whose segments are real photos: the first is unusable, the rest
+    carry ridges. Selection must land in the usable segment."""
+    import cv2
+    import numpy as np
+
+    out = tmp / "clip.mp4"
+    writer = None
+    for fourcc in ("avc1", "mp4v"):
+        writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*fourcc), fps, size)
+        if writer.isOpened():
+            break
+        writer.release()
+    if writer is None or not writer.isOpened():
+        pytest.skip("no VideoWriter codec available")
+    for path in paths:
+        img = cv2.imread(str(path))
+        assert img is not None, path
+        frame = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+        for _ in range(per):
+            writer.write(frame)
+    writer.release()
+    return out.read_bytes()
+
+
+def test_video_enroll_and_identify(client, tmp_path_factory):
+    """A clip that starts with a no-ridge frame and ends with real prints:
+    the selector must skip the first segment and enrol only usable frames."""
+    for name in ("sister_6176", "thumb_6172", "thumb_6174"):
+        if not (SAMPLES / f"{name}.jpg").exists():
+            pytest.skip("corpus photos not on disk")
+    tmp = tmp_path_factory.mktemp("clip")
+    clip = _clip_from(
+        [SAMPLES / "sister_6176.jpg", SAMPLES / "thumb_6172.jpg", SAMPLES / "thumb_6174.jpg"],
+        tmp,
+    )
+
+    r = client.post("/v1/identities", headers=KEY, json={"name": "VidQ", "consent": True})
+    assert r.status_code == 201, r.text
+    uuid = r.json()["uuid"]
+
+    r = client.post(f"/v1/identities/{uuid}/photos", headers=KEY,
+                    files=[("files", ("clip.mp4", clip, "video/mp4"))],
+                    data={"finger": "right_thumb"})
+    assert r.status_code == 202, r.text
+    job = _poll(client, r.json()["job_id"], timeout=600)
+    assert job["status"] == "succeeded", job
+    res = job["result"]
+    enrolled = [x for x in res["results"] if x["status"] == "enrolled"]
+    assert enrolled, res
+    # every enrolled frame comes from the ridge-bearing part of the clip and
+    # clears the gate comfortably
+    assert all(x["frame"] >= 30 for x in enrolled), enrolled
+    assert all(x["quality"] >= 0.6 for x in enrolled), enrolled
+    assert res["selection"]["candidates"] > len(enrolled)
+
+    r = client.post("/v1/identify", headers=KEY,
+                    files=[("files", ("clip.mp4", clip, "video/mp4"))])
+    job = _poll(client, r.json()["job_id"], timeout=600)
+    assert job["status"] == "succeeded", job
+    out = job["result"]
+    assert out["match"] is not None and out["match"]["name"] == "VidQ", out
+    assert out["frames"]["used"] >= 1
+
+
+def test_photo_path_reports_no_candidate_score(client):
+    """The single-photo route must stay exactly what it was: unscored."""
+    r = client.post("/v1/identities", headers=KEY, json={"name": "PlainQ", "consent": True})
+    uuid = r.json()["uuid"]
+    r = client.post(f"/v1/identities/{uuid}/photos", headers=KEY,
+                    files=[("files", _upload("thumb_6172"))])
+    job = _poll(client, r.json()["job_id"])
+    assert job["status"] == "succeeded", job
+    (result,) = job["result"]["results"]
+    assert result["candidate_score"] is None and result["frame"] is None
+    assert result["source"] == "thumb_6172.jpg"

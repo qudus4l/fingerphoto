@@ -43,7 +43,26 @@ class PhotoResult(BaseModel):
     detail: str | None = None
     templates: int | None = None
     minutiae: int | None = None
+    quality: float | None = None
     timings: dict | None = None
+    # Provenance: which upload and, for a video, which frame this came from.
+    source: str | None = None
+    frame: int | None = None
+    frame_time_s: float | None = None
+    candidate_score: float | None = None
+    strategy: str | None = None
+
+
+class QualityOut(BaseModel):
+    """Ridge score of one frame (POST /v1/quality)."""
+
+    score: float
+    strategy: str | None = None
+    pass_: bool = Field(alias="pass")
+    min_ridge_quality: float
+    detail: dict = {}
+
+    model_config = {"populate_by_name": True}
 
 
 class JobOut(BaseModel):
@@ -69,6 +88,10 @@ class VersionOut(BaseModel):
     sourceafis: str
     threshold: float
     min_minutiae: int
+    min_ridge_quality: float
+    video_frames_enroll: int
+    video_frames_identify: int
+    max_upload_mb: int
 
 
 class Problem(BaseModel):

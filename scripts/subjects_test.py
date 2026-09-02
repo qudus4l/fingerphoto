@@ -1,4 +1,7 @@
-"""Multi-subject evaluation on real photos.
+"""SUPERSEDED by scripts/evaluate.py, which reports the same pairs plus EER,
+failure-to-acquire and a machine-readable report. Kept for its printed layout.
+
+Multi-subject evaluation on real photos.
 
 Photos in data/samples/photo named <subject>_<id>.jpg (e.g. thumb_6172 =
 subject "thumb" (Q), sister_6175 = subject "sister"). Within-subject pairs are

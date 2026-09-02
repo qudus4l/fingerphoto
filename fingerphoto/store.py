@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import afis, crypto, db, identity, imaging, version
+from . import afis, crypto, db, frames, identity, imaging, version
 from .errors import AcquisitionError, ReasonCode, StoreError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -69,6 +69,22 @@ def threshold() -> float:
 
 def min_minutiae() -> int:
     return int(os.environ.get("FP_MIN_MINUTIAE", identity.MIN_MINUTIAE))
+
+
+def min_ridge_quality() -> float:
+    """Ridge-structure score a crop must reach before a template is extracted.
+    0 disables the score gate (the geometric sanity rules always apply)."""
+    return float(os.environ.get("FP_MIN_RIDGE_QUALITY", identity.MIN_RIDGE_QUALITY))
+
+
+def video_frames_enroll() -> int:
+    """How many frames a video enrollment keeps. Each costs a full extraction
+    (10-20 s), so this is a latency budget as much as an accuracy knob."""
+    return int(os.environ.get("FP_VIDEO_FRAMES_ENROLL", frames.VIDEO_FRAMES_ENROLL))
+
+
+def video_frames_identify() -> int:
+    return int(os.environ.get("FP_VIDEO_FRAMES_IDENTIFY", frames.VIDEO_FRAMES_IDENTIFY))
 
 
 def connect() -> sqlite3.Connection:
@@ -131,13 +147,39 @@ def create_identity(name: str, consent: bool, request_id: str | None = None) -> 
         con.close()
 
 
+def _expand_uploads(
+    uploads: list[tuple[str, np.ndarray | None, bytes | None]],
+    best_of: int | None,
+    k_video: int,
+) -> tuple[list[frames.Candidate], dict, list[dict]]:
+    """Uploads -> selected candidates, a selection summary, and one rejected
+    result per upload that could not be expanded at all (an unreadable or
+    over-long clip). Everything that did expand still competes in one pool."""
+    failures: list[dict] = []
+
+    def failed(name: str, exc: AcquisitionError) -> None:
+        failures.append(
+            {"filename": _safe_filename(name), "status": "rejected",
+             "reason_code": exc.code.value, "detail": str(exc)}
+        )
+
+    selected, summary = frames.expand(
+        uploads, best_of, k_video=k_video,
+        min_quality=min_ridge_quality(), on_error=failed,
+    )
+    return selected, summary, failures
+
+
 def enroll_photos(
     identity_uuid: str,
-    photos: list[tuple[str, np.ndarray, bytes | None]],
+    photos: list[tuple[str, np.ndarray | None, bytes | None]],
     finger: str = "unknown",
     request_id: str | None = None,
+    best_of: int | None = None,
 ) -> dict:
-    """Enroll decoded photos: list of (filename, bgr, original_bytes).
+    """Enroll uploads: list of (filename, bgr, original_bytes). A bgr of None
+    marks a video, whose frames are scored here and the best few enrolled.
+    best_of pools every upload and keeps that many overall (the browser burst).
     Per-photo failures are reported with reason codes, not raised."""
     if finger not in FINGER_POSITIONS:
         raise StoreError(
@@ -154,26 +196,34 @@ def enroll_photos(
             )
         key = _encryption_key()
         dest = photo_store() / identity_uuid
-        results = []
-        for filename, bgr, original in photos:
-            safe = _safe_filename(filename)
+        candidates, selection, results = _expand_uploads(
+            photos, best_of, video_frames_enroll()
+        )
+        for r in results:
+            audit(con, "photo.enroll", identity_uuid, request_id, "rejected",
+                  r["reason_code"])
+        for cand in candidates:
+            safe = _safe_filename(cand.name)
             stats: dict = {}
             try:
                 templates = identity.photo_template_set(
-                    bgr, min_minutiae=min_minutiae(), stats=stats
+                    cand.pixels(), min_minutiae=min_minutiae(),
+                    min_quality=min_ridge_quality(), stats=stats
                 )
             except AcquisitionError as e:
                 results.append(
                     {"filename": safe, "status": "rejected",
-                     "reason_code": e.code.value, "detail": str(e)}
+                     "reason_code": e.code.value, "detail": str(e),
+                     "quality": stats.get("quality"), "timings": stats, **cand.meta()}
                 )
                 audit(con, "photo.enroll", identity_uuid, request_id, "rejected", e.code.value)
                 continue
             now = time.time()
             stored_name = safe
-            if _store_originals() and original is not None:
+            if _store_originals():
+                # Only encode the frame if it is actually going to be kept.
                 dest.mkdir(parents=True, exist_ok=True)
-                data, scheme = crypto.encrypt(original, key)
+                data, scheme = crypto.encrypt(cand.original_bytes(), key)
                 # Uniquify: every capture from the web UI arrives as
                 # "capture.jpg", so a bare filename silently OVERWRITES the
                 # previous enrollment's original. SourceAFIS templates have no
@@ -184,24 +234,27 @@ def enroll_photos(
                                + (f".{ext}" if stem else "")
                                + (".enc" if scheme else ""))
                 (dest / stored_name).write_bytes(data)
+            per_template_quality = stats.get("template_quality") or [None] * len(templates)
             with con:
-                for t in templates:
+                for t, tq in zip(templates, per_template_quality):
                     blob, scheme = crypto.encrypt(t, key)
                     con.execute(
                         "INSERT INTO templates(identity_id, finger, template, minutiae,"
                         " source_photo, created_at, pipeline_version, sourceafis_version,"
-                        " enc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        " enc, quality) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (iid, finger, blob, afis.minutiae_count(t), stored_name, now,
-                         version.PIPELINE_VERSION, version.sourceafis_version(), scheme),
+                         version.PIPELINE_VERSION, version.sourceafis_version(), scheme, tq),
                     )
             best = max((afis.minutiae_count(t) or 0) for t in templates)
             results.append(
                 {"filename": safe, "status": "enrolled",
-                 "templates": len(templates), "minutiae": best, "timings": stats}
+                 "templates": len(templates), "minutiae": best,
+                 "quality": stats.get("quality"), "timings": stats, **cand.meta()}
             )
             audit(con, "photo.enroll", identity_uuid, request_id, "enrolled",
                   f"{len(templates)} templates")
-        return {"identity": {"uuid": identity_uuid, "name": name}, "results": results}
+        return {"identity": {"uuid": identity_uuid, "name": name},
+                "results": results, "selection": selection}
     finally:
         con.close()
 
@@ -254,49 +307,116 @@ def _save_probe(bgr: np.ndarray, outcome: str) -> None:
     cv2.imwrite(str(d / f"{stamp}_{outcome}.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
 
-def identify_bgr(
-    bgr: np.ndarray,
+def _probe_set(cands: list[frames.Candidate]) -> tuple[list[bytes], dict]:
+    """Templates from every usable candidate, unioned into one probe set.
+
+    Set-max scoring downstream means extra frames can only help: a frame that
+    matches nothing simply never wins the max. A candidate that fails to
+    acquire is skipped; if none survive, the last failure is re-raised so the
+    caller still gets the measured reason."""
+    probe: list[bytes] = []
+    used: list[frames.Candidate] = []
+    last: AcquisitionError | None = None
+    for c in cands:
+        try:
+            probe += identity.photo_template_set(
+                c.pixels(), min_minutiae=min_minutiae(), min_quality=min_ridge_quality()
+            )
+            used.append(c)
+        except AcquisitionError as e:
+            last = e
+            _save_probe(c.pixels(), "acquire-failed")
+    if not probe:
+        raise last if last is not None else AcquisitionError(
+            ReasonCode.NO_FINGER_FOUND, "no candidate frame produced a template"
+        )
+    return probe, {
+        "candidates": len(cands),
+        "used": len(used),
+        "scores": [round(c.score, 3) for c in used if c.score is not None],
+    }
+
+
+def identify_frames(
+    cands: list[frames.Candidate],
     match_threshold: float | None = None,
     request_id: str | None = None,
+    selection: dict | None = None,
 ) -> dict:
-    """1:N identification of one decoded photo against every enrolled identity."""
+    """1:N identification from one or more candidate frames."""
     thr = threshold() if match_threshold is None else match_threshold
     con = connect()
     try:
         gal = _decrypted_gallery(con)
         if not gal:
             raise StoreError(ReasonCode.GALLERY_EMPTY, "no identities enrolled")
-        try:
-            probe = identity.photo_template_set(bgr, min_minutiae=min_minutiae())
-        except AcquisitionError:
-            _save_probe(bgr, "acquire-failed")
-            raise
+        probe, used = _probe_set(cands)
         scores = {u: identity.set_score(probe, ts) for u, (_, ts) in gal.items()}
         ranked = sorted(scores.items(), key=lambda kv: -kv[1])
         best_uuid, best_score = ranked[0]
         matched = best_score >= thr
-        _save_probe(bgr, f"{'match' if matched else 'nomatch'}-{best_score:.0f}")
+        for c in cands:
+            _save_probe(c.pixels(), f"{'match' if matched else 'nomatch'}-{best_score:.0f}")
         audit(con, "identify", best_uuid if matched else None, request_id,
               "match" if matched else "no_match")
         entry = lambda u, s: {"uuid": u, "name": gal[u][0], "score": round(s, 1)}
-        return {
+        out = {
             "match": entry(best_uuid, best_score) if matched else None,
             "best_candidate": entry(best_uuid, best_score),
             "scores": [entry(u, s) for u, s in ranked],
             "threshold": thr,
+            "frames": used,
         }
+        if selection is not None:
+            out["selection"] = selection
+        return out
     finally:
         con.close()
 
 
-def verify_bgr(
-    identity_uuid: str,
+def _one(bgr: np.ndarray) -> list[frames.Candidate]:
+    """A single decoded photo as a one-element candidate list."""
+    return [frames.Candidate(name="probe", bgr=bgr, original=None,
+                             source="probe", index=0, time_s=None)]
+
+
+def identify_bgr(
     bgr: np.ndarray,
+    match_threshold: float | None = None,
+    request_id: str | None = None,
+) -> dict:
+    """1:N identification of one decoded photo against every enrolled identity."""
+    return identify_frames(_one(bgr), match_threshold, request_id)
+
+
+def identify_uploads(
+    uploads: list[tuple[str, np.ndarray | None, bytes | None]],
+    match_threshold: float | None = None,
+    best_of: int | None = None,
+    request_id: str | None = None,
+) -> dict:
+    """1:N identification from photos and/or videos, best frames first."""
+    cands, selection, failures = _expand_uploads(
+        uploads, best_of, video_frames_identify()
+    )
+    if not cands:
+        raise AcquisitionError(
+            ReasonCode.VIDEO_UNREADABLE,
+            "; ".join(f["detail"] for f in failures) or "no usable frames in the upload",
+        )
+    selection["rejected"] = failures
+    return identify_frames(cands, match_threshold, request_id, selection)
+
+
+def verify_frames(
+    identity_uuid: str,
+    cands: list[frames.Candidate],
     match_threshold: float | None = None,
     finger: str | None = None,
     request_id: str | None = None,
+    selection: dict | None = None,
 ) -> dict:
-    """1:1 verification of one decoded photo against a claimed identity."""
+    """1:1 verification from one or more candidate frames."""
     thr = threshold() if match_threshold is None else match_threshold
     con = connect()
     try:
@@ -310,7 +430,7 @@ def verify_bgr(
             f"identity {identity_uuid} has no enrolled templates"
             + (f" for finger {finger}" if finger else ""),
         )
-    probe = identity.photo_template_set(bgr, min_minutiae=min_minutiae())
+    probe, used = _probe_set(cands)
     verified, score = identity.verify(probe, enrolled, thr)
     con = connect()
     try:
@@ -318,12 +438,49 @@ def verify_bgr(
               "verified" if verified else "rejected")
     finally:
         con.close()
-    return {
+    out = {
         "identity": {"uuid": identity_uuid, "name": name},
         "verified": verified,
         "score": round(score, 1),
         "threshold": thr,
+        "frames": used,
     }
+    if selection is not None:
+        out["selection"] = selection
+    return out
+
+
+def verify_bgr(
+    identity_uuid: str,
+    bgr: np.ndarray,
+    match_threshold: float | None = None,
+    finger: str | None = None,
+    request_id: str | None = None,
+) -> dict:
+    """1:1 verification of one decoded photo against a claimed identity."""
+    return verify_frames(identity_uuid, _one(bgr), match_threshold, finger, request_id)
+
+
+def verify_uploads(
+    identity_uuid: str,
+    uploads: list[tuple[str, np.ndarray | None, bytes | None]],
+    match_threshold: float | None = None,
+    best_of: int | None = None,
+    finger: str | None = None,
+    request_id: str | None = None,
+) -> dict:
+    """1:1 verification from photos and/or videos, best frames first."""
+    cands, selection, failures = _expand_uploads(
+        uploads, best_of, video_frames_identify()
+    )
+    if not cands:
+        raise AcquisitionError(
+            ReasonCode.VIDEO_UNREADABLE,
+            "; ".join(f["detail"] for f in failures) or "no usable frames in the upload",
+        )
+    selection["rejected"] = failures
+    return verify_frames(identity_uuid, cands, match_threshold, finger,
+                         request_id, selection)
 
 
 def delete_identity(identity_uuid: str, request_id: str | None = None) -> dict:
@@ -432,11 +589,16 @@ def gallery(finger: str | None = None) -> dict[str, list[bytes]]:
 
 
 def identify_photo(photo_path: Path, match_threshold: float | None = None) -> dict:
-    """CLI wrapper around identify_bgr; returns the legacy shape."""
-    data = Path(photo_path).read_bytes()
-    bgr = imaging.decode_image(data, Path(photo_path).name)
+    """CLI wrapper around identify_uploads; returns the legacy shape.
+    Accepts a video as readily as a photo."""
+    path = Path(photo_path)
+    data = path.read_bytes()
+    if frames.is_video(path.name):
+        upload = (path.name, None, data)
+    else:
+        upload = (path.name, imaging.decode_image(data, path.name), data)
     try:
-        result = identify_bgr(bgr, match_threshold)
+        result = identify_uploads([upload], match_threshold)
     except StoreError as e:
         if e.code is ReasonCode.GALLERY_EMPTY:
             return {"match": None, "scores": {}, "note": "gallery is empty"}
@@ -446,4 +608,5 @@ def identify_photo(photo_path: Path, match_threshold: float | None = None) -> di
         "best_candidate": result["best_candidate"]["name"],
         "scores": {e["name"]: e["score"] for e in result["scores"]},
         "threshold": result["threshold"],
+        "frames": result.get("frames"),
     }

@@ -65,7 +65,11 @@ def main() -> None:
         raw = crypto.decrypt(path.read_bytes(), "fernet-v1" if src.endswith(".enc") else None, key)
         try:
             bgr = imaging.decode_image(raw, src)
-            templates = identity.photo_template_set(bgr, min_minutiae=store.min_minutiae())
+            stats: dict = {}
+            templates = identity.photo_template_set(
+                bgr, min_minutiae=store.min_minutiae(),
+                min_quality=store.min_ridge_quality(), stats=stats
+            )
         except Exception as e:
             print(f"  {name:10s} {src:34s} {len(ids):2d} tmpl  "
                   f"pipeline {pv}  RE-EXTRACT FAILED: {type(e).__name__}: {str(e)[:36]}")
@@ -80,14 +84,15 @@ def main() -> None:
             con.execute(
                 f"DELETE FROM templates WHERE id IN ({','.join('?' * len(ids))})", ids
             )
-            for t in templates:
+            tq = stats.get("template_quality") or [None] * len(templates)
+            for t, q in zip(templates, tq):
                 blob, scheme = crypto.encrypt(t, key)
                 con.execute(
                     "INSERT INTO templates(identity_id, finger, template, minutiae,"
                     " source_photo, created_at, pipeline_version, sourceafis_version,"
-                    " enc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " enc, quality) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (iid, finger, blob, afis.minutiae_count(t), src, now,
-                     args.version, version.sourceafis_version(), scheme),
+                     args.version, version.sourceafis_version(), scheme, q),
                 )
         replaced += len(templates)
 

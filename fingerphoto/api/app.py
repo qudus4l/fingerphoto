@@ -33,6 +33,9 @@ def _export_core_env(settings: Settings) -> None:
     os.environ["FP_DATA_DIR"] = str(settings.data_dir)
     os.environ["FP_THRESHOLD"] = str(settings.threshold)
     os.environ["FP_MIN_MINUTIAE"] = str(settings.min_minutiae)
+    os.environ["FP_MIN_RIDGE_QUALITY"] = str(settings.min_ridge_quality)
+    os.environ["FP_VIDEO_FRAMES_ENROLL"] = str(settings.video_frames_enroll)
+    os.environ["FP_VIDEO_FRAMES_IDENTIFY"] = str(settings.video_frames_identify)
     os.environ["FP_STORE_ORIGINALS"] = "true" if settings.store_originals else "false"
     os.environ["FP_JVM_HEAP"] = settings.jvm_heap
     if settings.encryption_key:
