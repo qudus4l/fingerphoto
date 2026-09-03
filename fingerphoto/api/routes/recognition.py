@@ -41,6 +41,7 @@ async def identify(
     files: Annotated[list[UploadFile] | None, File()] = None,
     threshold: Threshold = None,
     best_of: BestOf = None,
+    guided: Annotated[bool, Form()] = False,
     idempotency_key: IdemKey = None,
 ):
     if not store.list_identities():
@@ -49,7 +50,9 @@ async def identify(
     rid = request_id_var.get()
     job = request.app.state.jobs.submit(
         "identify",
-        lambda: store.identify_uploads(uploads, threshold, best_of, request_id=rid),
+        lambda: store.identify_uploads(
+            uploads, threshold, best_of, request_id=rid, guided=guided
+        ),
         idempotency_key=idempotency_key,
     )
     return accepted(job)
@@ -66,6 +69,7 @@ async def verify(
     threshold: Threshold = None,
     best_of: BestOf = None,
     finger: Annotated[FingerPosition | None, Form()] = None,
+    guided: Annotated[bool, Form()] = False,
     idempotency_key: IdemKey = None,
 ):
     store.get_identity(identity_uuid)  # 404 before decoding anything
@@ -74,7 +78,8 @@ async def verify(
     job = request.app.state.jobs.submit(
         "verify",
         lambda: store.verify_uploads(
-            identity_uuid, uploads, threshold, best_of, finger=finger, request_id=rid
+            identity_uuid, uploads, threshold, best_of, finger=finger,
+            request_id=rid, guided=guided
         ),
         idempotency_key=idempotency_key,
     )
@@ -82,7 +87,10 @@ async def verify(
 
 
 @router.post("/v1/quality", response_model=QualityOut)
-async def frame_quality(file: Annotated[UploadFile, File()]):
+async def frame_quality(
+    file: Annotated[UploadFile, File()],
+    guided: Annotated[bool, Form()] = False,
+):
     """Ridge score of a single frame, synchronously.
 
     This is the capture UI's live indicator: it is the same measurement the
@@ -95,7 +103,8 @@ async def frame_quality(file: Annotated[UploadFile, File()]):
             ReasonCode.UNSUPPORTED_MEDIA_TYPE, "send a single image, not a video"
         )
     (_, bgr, _), = await read_uploads([file])
-    score, strategy, detail = await run_in_threadpool(frames.frame_score, bgr)
+    scorer = frames.guided_frame_score if guided else frames.frame_score
+    score, strategy, detail = await run_in_threadpool(scorer, bgr)
     threshold = get_settings().min_ridge_quality
     return QualityOut(
         score=round(score, 4),

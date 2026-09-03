@@ -18,6 +18,15 @@ photo ─▶ skin-mask distal crop ─▶ grayscale
       ─▶ set-vs-set max-score matching (threshold ≈ 40)
 ```
 
+The phone UI uses a separate `guided=true` contract. Because the browser sends
+only the already-positioned guide crop, the server skips both whole-photo
+localizers and extracts one normalized template per scan. Enrollment requires
+two distinct placements, extracts them in parallel, cross-matches them in both
+directions, and commits both templates atomically only when the weaker score
+clears the configured threshold. Verification needs one guided scan. On the
+current development machine this measured about 7.3 s for two-scan enrollment
+and 3.2 s for identification, versus 22 s for the former single-photo path.
+
 Scale normalization is the make-or-break step: a photo has unknown DPI, so we
 estimate the ridge period (grid-median FFT — a single global FFT gets captured
 by creases/specular highlights), rescale until ridges sit ~8 px apart, then
@@ -79,8 +88,8 @@ job id; poll `GET /v1/jobs/{id}` until `succeeded`/`failed`. Auth is an
 |---|---|
 | `POST /v1/identities` | Create identity `{name, consent: true}` (consent is mandatory) |
 | `GET /v1/identities` · `GET /v1/identities/{uuid}` | List / inspect |
-| `POST /v1/identities/{uuid}/photos` | Enroll photos or a video (multipart `files`, optional `finger`, `best_of`) → 202 |
-| `POST /v1/identify` | 1:N search of a photo, video, or frame set against everyone → 202 |
+| `POST /v1/identities/{uuid}/photos` | Enroll photos or a video (multipart `files`, optional `finger`, `best_of`; `guided=true` requires two matching crops) → 202 |
+| `POST /v1/identify` | 1:N search of a photo, video, or frame set against everyone (`guided=true` for a pre-cropped scan) → 202 |
 | `POST /v1/identities/{uuid}/verify` | 1:1 check against a claimed identity → 202 |
 | `POST /v1/quality` | Ridge score of one frame, synchronous — the capture UI live indicator |
 | `GET /v1/jobs/{id}` | Poll a job; per-photo results carry machine-readable `reason_code`s |
@@ -135,12 +144,12 @@ and `/readyz` flips, so a load balancer stops routing. Jobs are in-memory
 by design — a restart loses in-flight jobs and clients re-submit.
 
 **Storage.** SQLite (WAL — keep the data volume on a local filesystem, not
-NFS) at `FP_DB_PATH`; original photos under `FP_DATA_DIR/enrolled/<uuid>/`.
-Originals are kept deliberately: SourceAFIS templates have **no backward
-compatibility across versions** (per its own docs), so upgrading the matcher
-means re-extracting from originals. Set `FP_STORE_ORIGINALS=false` to opt
-out — accepting that a SourceAFIS upgrade then means re-photographing
-everyone. Templates and photos are encrypted at rest with
+NFS) at `FP_DB_PATH`. Only derived templates are retained by default; guided
+capture crops are always discarded after extraction. Set
+`FP_STORE_ORIGINALS=true` only to opt into retaining source images under
+`FP_DATA_DIR/enrolled/<uuid>/`. This permits re-extraction after a SourceAFIS
+upgrade, whose templates are not backward compatible, at the cost of storing
+more-sensitive biometric material. Templates and any opted-in photos are encrypted at rest with
 `FP_ENCRYPTION_KEY` (Fernet; generate with
 `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
 Back the key up separately from the data volume — losing it makes originals
@@ -187,7 +196,7 @@ parameters change, then re-extract stale templates from originals.
 ```sh
 make test-fast   # unit + API-shape tests, no JVM (~5 s, 114 tests)
 make test        # + golden scores, quality-gate corpus, API e2e (minutes)
-node scripts/capture_sim.js   # the capture page against a simulated camera (~60 s)
+node scripts/capture_sim.js   # guarantee/crop checks against a simulated camera
 ```
 
 Golden bands encode this project's validated numbers: genuine thumb trio
@@ -195,13 +204,11 @@ Golden bands encode this project's validated numbers: genuine thumb trio
 two no-ridge photos asserted to be *refused*, plus a two-thread
 concurrent-extraction test (JVM lock + enhancer thread-safety).
 
-`scripts/capture_sim.js` runs `capture.html`'s own script in a VM against a
-fake Android camera — a lens with a true focus distance, ridges that fade as it
-defocuses, a torch that helps — and checks the adaptive sweep converges on that
-distance, picks the better light, restores the camera afterwards, and still
-falls back to the plain burst on a browser with no camera controls. It needs
-only node. It is the only automated coverage the capture page has, because the
-alternative is a phone in someone's hand.
+`scripts/capture_sim.js` runs `capture.html`'s own script against a fake camera
+and verifies that capture uploads one compressed guide crop rather than the
+whole frame, without changing focus distance or toggling the torch. It needs
+only node. It complements the page/API tests because the alternative is a
+phone in someone's hand.
 
 **Measuring a change.** `scripts/evaluate.py` runs the labelled corpus
 (`data/samples/manifest.csv`) and reports genuine/impostor distributions, EER,

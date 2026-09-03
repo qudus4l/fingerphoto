@@ -3,9 +3,8 @@
 Design notes:
 - An identity holds template SETS from several photos (multi-photo enrollment
   is the biggest accuracy lever; set-max scoring at identification).
-- Original photos are kept (encrypted when FP_ENCRYPTION_KEY is set) because
-  SourceAFIS templates are version-locked — upgrading the matcher means
-  re-extracting from the originals. Storage is opt-out via FP_STORE_ORIGINALS.
+- Original photos are not retained by default. Operators can explicitly opt in
+  for re-extraction after SourceAFIS upgrades via FP_STORE_ORIGINALS.
 - Finger position is stored per template (ANSI/NIST-ITL symbolic names) so
   4+1 fusion can query per position once multi-finger enrollment lands.
 - Every mutating or matching operation writes an audit_log row — metadata
@@ -21,6 +20,7 @@ import shutil
 import sqlite3
 import time
 import uuid as uuidlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -60,7 +60,7 @@ def _encryption_key() -> str | None:
 
 
 def _store_originals() -> bool:
-    return os.environ.get("FP_STORE_ORIGINALS", "true").lower() not in ("0", "false", "no")
+    return os.environ.get("FP_STORE_ORIGINALS", "false").lower() in ("1", "true", "yes")
 
 
 def threshold() -> float:
@@ -170,12 +170,31 @@ def _expand_uploads(
     return selected, summary, failures
 
 
+def _extract_candidate(cand: frames.Candidate, stats: dict, guided: bool) -> list[bytes]:
+    """Extract one candidate using the appropriate acquisition contract.
+
+    Guided candidates already contain only the on-screen fingerprint region,
+    so running two more localizers and three scale guesses wastes most of the
+    latency. The server still performs its ridge-quality gate and scale
+    normalization before extracting one SourceAFIS template.
+    """
+    return identity.photo_template_set(
+        cand.pixels(),
+        crop=not guided,
+        sweep=(1.0,) if guided else identity.SCALE_SWEEP,
+        min_minutiae=min_minutiae(),
+        min_quality=min_ridge_quality(),
+        stats=stats,
+    )
+
+
 def enroll_photos(
     identity_uuid: str,
     photos: list[tuple[str, np.ndarray | None, bytes | None]],
     finger: str = "unknown",
     request_id: str | None = None,
     best_of: int | None = None,
+    guided: bool = False,
 ) -> dict:
     """Enroll uploads: list of (filename, bgr, original_bytes). A bgr of None
     marks a video, whose frames are scored here and the best few enrolled.
@@ -202,14 +221,161 @@ def enroll_photos(
         for r in results:
             audit(con, "photo.enroll", identity_uuid, request_id, "rejected",
                   r["reason_code"])
+
+        if guided:
+            started = time.monotonic()
+            if len(candidates) != 2:
+                results.append({
+                    "filename": "guided-enrollment",
+                    "status": "rejected",
+                    "reason_code": ReasonCode.ENROLLMENT_MISMATCH.value,
+                    "detail": "guided enrollment requires two separate scans of the same finger",
+                })
+                audit(con, "photo.enroll", identity_uuid, request_id, "rejected",
+                      ReasonCode.ENROLLMENT_MISMATCH.value)
+                return {
+                    "identity": {"uuid": identity_uuid, "name": name},
+                    "results": results,
+                    "selection": selection,
+                    "profile": "guided",
+                    "processing_s": round(time.monotonic() - started, 3),
+                    "self_check": {"passed": False, "reason": "two_scans_required"},
+                }
+            if np.array_equal(candidates[0].pixels(), candidates[1].pixels()):
+                results.append({
+                    "filename": "guided-enrollment",
+                    "status": "rejected",
+                    "reason_code": ReasonCode.ENROLLMENT_MISMATCH.value,
+                    "detail": "the second scan is identical to the first; lift and replace the finger",
+                })
+                audit(con, "photo.enroll", identity_uuid, request_id, "rejected",
+                      ReasonCode.ENROLLMENT_MISMATCH.value)
+                return {
+                    "identity": {"uuid": identity_uuid, "name": name},
+                    "results": results,
+                    "selection": selection,
+                    "profile": "guided",
+                    "processing_s": round(time.monotonic() - started, 3),
+                    "self_check": {"passed": False, "reason": "duplicate_scan"},
+                }
+
+            def extract(cand: frames.Candidate):
+                stats: dict = {}
+                try:
+                    return cand, _extract_candidate(cand, stats, True), stats, None
+                except AcquisitionError as exc:
+                    return cand, [], stats, exc
+
+            # The two independent scans are CPU-heavy but thread-safe. Running
+            # them together cuts guided enrollment wall time roughly in half.
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="fp-guided") as pool:
+                extracted = list(pool.map(extract, candidates))
+
+            usable = []
+            for cand, templates, stats, exc in extracted:
+                safe = _safe_filename(cand.name)
+                if exc is not None:
+                    results.append({
+                        "filename": safe,
+                        "status": "rejected",
+                        "reason_code": exc.code.value,
+                        "detail": str(exc),
+                        "quality": stats.get("quality"),
+                        "timings": stats,
+                        **cand.meta(),
+                    })
+                    audit(con, "photo.enroll", identity_uuid, request_id, "rejected", exc.code.value)
+                else:
+                    usable.append((cand, templates, stats))
+
+            if len(usable) != 2:
+                return {
+                    "identity": {"uuid": identity_uuid, "name": name},
+                    "results": results,
+                    "selection": selection,
+                    "profile": "guided",
+                    "processing_s": round(time.monotonic() - started, 3),
+                    "self_check": {"passed": False, "reason": "quality"},
+                }
+
+            first, second = usable[0][1], usable[1][1]
+            directional = [identity.set_score(first, second), identity.set_score(second, first)]
+            check_score = min(directional)
+            if check_score < threshold():
+                detail = (
+                    f"the two enrollment scans did not match each other "
+                    f"(score {check_score:.1f}, required {threshold():.1f})"
+                )
+                for cand, _, stats in usable:
+                    results.append({
+                        "filename": _safe_filename(cand.name),
+                        "status": "rejected",
+                        "reason_code": ReasonCode.ENROLLMENT_MISMATCH.value,
+                        "detail": detail,
+                        "quality": stats.get("quality"),
+                        "timings": stats,
+                        **cand.meta(),
+                    })
+                audit(con, "photo.enroll", identity_uuid, request_id, "rejected",
+                      ReasonCode.ENROLLMENT_MISMATCH.value)
+                return {
+                    "identity": {"uuid": identity_uuid, "name": name},
+                    "results": results,
+                    "selection": selection,
+                    "profile": "guided",
+                    "processing_s": round(time.monotonic() - started, 3),
+                    "self_check": {
+                        "passed": False,
+                        "score": round(check_score, 1),
+                        "directional_scores": [round(s, 1) for s in directional],
+                        "threshold": threshold(),
+                    },
+                }
+
+            # Commit both scans atomically only after the cross-scan match.
+            with con:
+                for cand, templates, stats in usable:
+                    safe, now = _safe_filename(cand.name), time.time()
+                    per_quality = stats.get("template_quality") or [None] * len(templates)
+                    for template, quality in zip(templates, per_quality):
+                        blob, scheme = crypto.encrypt(template, key)
+                        con.execute(
+                            "INSERT INTO templates(identity_id, finger, template, minutiae,"
+                            " source_photo, created_at, pipeline_version, sourceafis_version,"
+                            " enc, quality) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (iid, finger, blob, afis.minutiae_count(template), safe, now,
+                             version.PIPELINE_VERSION, version.sourceafis_version(), scheme, quality),
+                        )
+                    results.append({
+                        "filename": safe,
+                        "status": "enrolled",
+                        "templates": len(templates),
+                        "minutiae": max((afis.minutiae_count(t) or 0) for t in templates),
+                        "quality": stats.get("quality"),
+                        "timings": stats,
+                        **cand.meta(),
+                    })
+            audit(con, "photo.enroll", identity_uuid, request_id, "enrolled",
+                  f"guided self-check {check_score:.1f}; {sum(len(x[1]) for x in usable)} templates")
+            return {
+                "identity": {"uuid": identity_uuid, "name": name},
+                "results": results,
+                "selection": selection,
+                "profile": "guided",
+                "processing_s": round(time.monotonic() - started, 3),
+                "self_check": {
+                    "passed": True,
+                    "score": round(check_score, 1),
+                    "directional_scores": [round(s, 1) for s in directional],
+                    "threshold": threshold(),
+                },
+            }
+
         for cand in candidates:
             safe = _safe_filename(cand.name)
             stats: dict = {}
             try:
-                templates = identity.photo_template_set(
-                    cand.pixels(), min_minutiae=min_minutiae(),
-                    min_quality=min_ridge_quality(), stats=stats
-                )
+                templates = _extract_candidate(cand, stats, False)
             except AcquisitionError as e:
                 results.append(
                     {"filename": safe, "status": "rejected",
@@ -307,7 +473,7 @@ def _save_probe(bgr: np.ndarray, outcome: str) -> None:
     cv2.imwrite(str(d / f"{stamp}_{outcome}.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
 
-def _probe_set(cands: list[frames.Candidate]) -> tuple[list[bytes], dict]:
+def _probe_set(cands: list[frames.Candidate], guided: bool = False) -> tuple[list[bytes], dict]:
     """Templates from every usable candidate, unioned into one probe set.
 
     Set-max scoring downstream means extra frames can only help: a frame that
@@ -319,9 +485,7 @@ def _probe_set(cands: list[frames.Candidate]) -> tuple[list[bytes], dict]:
     last: AcquisitionError | None = None
     for c in cands:
         try:
-            probe += identity.photo_template_set(
-                c.pixels(), min_minutiae=min_minutiae(), min_quality=min_ridge_quality()
-            )
+            probe += _extract_candidate(c, {}, guided)
             used.append(c)
         except AcquisitionError as e:
             last = e
@@ -342,6 +506,7 @@ def identify_frames(
     match_threshold: float | None = None,
     request_id: str | None = None,
     selection: dict | None = None,
+    guided: bool = False,
 ) -> dict:
     """1:N identification from one or more candidate frames."""
     thr = threshold() if match_threshold is None else match_threshold
@@ -350,7 +515,8 @@ def identify_frames(
         gal = _decrypted_gallery(con)
         if not gal:
             raise StoreError(ReasonCode.GALLERY_EMPTY, "no identities enrolled")
-        probe, used = _probe_set(cands)
+        started = time.monotonic()
+        probe, used = _probe_set(cands, guided)
         scores = {u: identity.set_score(probe, ts) for u, (_, ts) in gal.items()}
         ranked = sorted(scores.items(), key=lambda kv: -kv[1])
         best_uuid, best_score = ranked[0]
@@ -366,6 +532,8 @@ def identify_frames(
             "scores": [entry(u, s) for u, s in ranked],
             "threshold": thr,
             "frames": used,
+            "profile": "guided" if guided else "standard",
+            "processing_s": round(time.monotonic() - started, 3),
         }
         if selection is not None:
             out["selection"] = selection
@@ -394,6 +562,7 @@ def identify_uploads(
     match_threshold: float | None = None,
     best_of: int | None = None,
     request_id: str | None = None,
+    guided: bool = False,
 ) -> dict:
     """1:N identification from photos and/or videos, best frames first."""
     cands, selection, failures = _expand_uploads(
@@ -405,7 +574,7 @@ def identify_uploads(
             "; ".join(f["detail"] for f in failures) or "no usable frames in the upload",
         )
     selection["rejected"] = failures
-    return identify_frames(cands, match_threshold, request_id, selection)
+    return identify_frames(cands, match_threshold, request_id, selection, guided)
 
 
 def verify_frames(
@@ -415,6 +584,7 @@ def verify_frames(
     finger: str | None = None,
     request_id: str | None = None,
     selection: dict | None = None,
+    guided: bool = False,
 ) -> dict:
     """1:1 verification from one or more candidate frames."""
     thr = threshold() if match_threshold is None else match_threshold
@@ -430,7 +600,8 @@ def verify_frames(
             f"identity {identity_uuid} has no enrolled templates"
             + (f" for finger {finger}" if finger else ""),
         )
-    probe, used = _probe_set(cands)
+    started = time.monotonic()
+    probe, used = _probe_set(cands, guided)
     verified, score = identity.verify(probe, enrolled, thr)
     con = connect()
     try:
@@ -444,6 +615,8 @@ def verify_frames(
         "score": round(score, 1),
         "threshold": thr,
         "frames": used,
+        "profile": "guided" if guided else "standard",
+        "processing_s": round(time.monotonic() - started, 3),
     }
     if selection is not None:
         out["selection"] = selection
@@ -468,6 +641,7 @@ def verify_uploads(
     best_of: int | None = None,
     finger: str | None = None,
     request_id: str | None = None,
+    guided: bool = False,
 ) -> dict:
     """1:1 verification from photos and/or videos, best frames first."""
     cands, selection, failures = _expand_uploads(
@@ -480,7 +654,7 @@ def verify_uploads(
         )
     selection["rejected"] = failures
     return verify_frames(identity_uuid, cands, match_threshold, finger,
-                         request_id, selection)
+                         request_id, selection, guided)
 
 
 def delete_identity(identity_uuid: str, request_id: str | None = None) -> dict:
@@ -517,6 +691,61 @@ def get_identity(identity_uuid: str) -> dict:
                 "created_at": created_at, "templates": templates, "photos": photos}
     finally:
         con.close()
+
+
+def list_photos(identity_uuid: str) -> list[dict]:
+    """Stored originals for one identity (one row per source photo)."""
+    con = connect()
+    try:
+        iid, _, _ = _resolve(con, identity_uuid)
+        rows = con.execute(
+            "SELECT source_photo, finger, MAX(created_at), MAX(minutiae),"
+            " MAX(quality), COUNT(*) FROM templates"
+            " WHERE identity_id = ? AND source_photo IS NOT NULL AND source_photo != ''"
+            " GROUP BY source_photo ORDER BY MAX(created_at) DESC",
+            (iid,),
+        ).fetchall()
+        dest = photo_store() / identity_uuid
+        return [
+            {
+                "filename": name,
+                "finger": finger,
+                "created_at": created,
+                "minutiae": minutiae,
+                "quality": quality,
+                "templates": n,
+                "available": (dest / name).is_file(),
+            }
+            for name, finger, created, minutiae, quality, n in rows
+        ]
+    finally:
+        con.close()
+
+
+def original_photo_bytes(identity_uuid: str, filename: str) -> tuple[bytes, str]:
+    """Decrypted original image bytes and a media type."""
+    name = _safe_filename(filename)
+    con = connect()
+    try:
+        _resolve(con, identity_uuid)
+        root = (photo_store() / identity_uuid).resolve()
+        path = (root / name).resolve()
+        if path != root and root not in path.parents:
+            raise StoreError(ReasonCode.PHOTO_NOT_FOUND, f"no photo {name}")
+        if not path.is_file():
+            raise StoreError(ReasonCode.PHOTO_NOT_FOUND, f"no photo {name}")
+        enc_row = con.execute(
+            "SELECT enc FROM templates WHERE source_photo = ? LIMIT 1", (name,)
+        ).fetchone()
+        scheme = enc_row[0] if enc_row else (
+            crypto.SCHEME_FERNET if name.endswith(".enc") else None
+        )
+        raw = crypto.decrypt(path.read_bytes(), scheme, _encryption_key())
+    finally:
+        con.close()
+    lower = name.lower()
+    media = "image/png" if ".png" in lower else "image/jpeg"
+    return raw, media
 
 
 def list_identities() -> list[dict]:

@@ -37,9 +37,12 @@ def fake_pipeline(monkeypatch):
 
     monkeypatch.setattr(identity, "photo_template_set", fake_template_set)
     monkeypatch.setattr(afis, "minutiae_count", lambda t: 20)
-    monkeypatch.setattr(identity, "set_score", lambda probe, enrolled: 55.0)
+    # Stay above the configured operational threshold (currently 85) so these
+    # tests exercise store flow rather than threshold calibration.
+    fake_score = 100.0
+    monkeypatch.setattr(identity, "set_score", lambda probe, enrolled: fake_score)
     monkeypatch.setattr(
-        identity, "verify", lambda probe, enrolled, thr: (55.0 >= thr, 55.0)
+        identity, "verify", lambda probe, enrolled, thr: (fake_score >= thr, fake_score)
     )
     return fake_template_set
 

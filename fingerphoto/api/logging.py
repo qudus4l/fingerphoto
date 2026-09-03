@@ -101,8 +101,10 @@ class BodyLimitMiddleware:
             return await self.app(scope, receive, send)
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
         length = headers.get(b"content-length")
+        # Empty POSTs (e.g. /capture/session renew) often omit Content-Length on
+        # some mobile browsers. Treat missing as 0 and still count streamed bytes.
         if length is None:
-            return await _send_problem(send, 411, "Content-Length header is required", None)
+            length = b"0"
         if int(length) > self.max_bytes:
             return await _send_problem(
                 send, 413,

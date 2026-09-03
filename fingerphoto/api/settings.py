@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     db_path: Path = ROOT / "data" / "identities.db"
     data_dir: Path = ROOT / "data"
-    threshold: float = 40.0
+    threshold: float = 50.0
     min_minutiae: int = 15
     min_ridge_quality: float = 0.40  # keep in sync with quality.MIN_RIDGE_QUALITY
     api_keys: str = ""  # comma-separated; empty refuses to start unless dev_no_auth
@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     max_upload_mb: int = 64
     video_frames_enroll: int = 3  # frames kept per enrollment clip (each costs a full extraction)
     video_frames_identify: int = 2
-    store_originals: bool = True
+    # Biometric photos are more sensitive than derived templates. Retention is
+    # explicit opt-in; guided capture never retains its source crops.
+    store_originals: bool = False
     encryption_key: str = ""
     job_ttl_s: int = 3600
     jvm_heap: str = "512m"

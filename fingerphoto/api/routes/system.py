@@ -1,34 +1,70 @@
 """Liveness, readiness, and version endpoints."""
 from __future__ import annotations
 
+import json
+import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ... import store, version
 from ..schemas import VersionOut
+from ..security import CAPTURE_SESSION_COOKIE, CAPTURE_SESSION_TTL_S, create_capture_session
 from ..settings import get_settings
 
 public_router = APIRouter()  # mounted without auth
 router = APIRouter()  # mounted behind the API key
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
+_CAPTURE_BOOT = "/*__FP_CONFIG__*/"
+_TEST_NAMES = ("Joshua", "Kyle", "Tom")
+
+
+def _capture_test_name() -> str:
+    """Give each page load a readable identity that will not mix test prints."""
+    return f"{secrets.choice(_TEST_NAMES)}-{secrets.token_hex(2).upper()}"
+
+
+def _set_capture_cookie(response: JSONResponse | HTMLResponse, request: Request) -> None:
+    response.set_cookie(
+        CAPTURE_SESSION_COOKIE,
+        create_capture_session(request),
+        max_age=CAPTURE_SESSION_TTL_S,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        path="/",
+    )
 
 
 @public_router.get("/capture", include_in_schema=False)
-async def capture_page():
-    """Guided capture UI. Unauthenticated because it is just a static page —
-    the API key is entered in the form and travels on the XHRs it makes.
-    Note: browsers only grant camera access over HTTPS or localhost.
+async def capture_page(request: Request):
+    """Guided capture UI for phone testing.
+
+    Creates a short-lived HttpOnly browser session and injects only a default
+    enroll name so the page is one-tap (no credential field or exposed key).
+    Browsers only grant camera access over HTTPS or localhost.
 
     Sent no-store: mobile Safari otherwise serves a stale copy for a long
     time, which silently hides UI fixes during tuning."""
-    return FileResponse(
-        STATIC / "capture.html",
-        media_type="text/html",
+    boot = {"name": _capture_test_name()}
+    html = (STATIC / "capture.html").read_text(encoding="utf-8")
+    html = html.replace(_CAPTURE_BOOT, f"window.__FP_CONFIG__={json.dumps(boot)};", 1)
+    response = HTMLResponse(
+        html,
         headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"},
     )
+    _set_capture_cookie(response, request)
+    return response
+
+
+@public_router.post("/capture/session", include_in_schema=False)
+async def refresh_capture_session(request: Request):
+    """Renew the browser credential without exposing the permanent API key."""
+    response = JSONResponse({"status": "ok"})
+    _set_capture_cookie(response, request)
+    return response
 
 
 @public_router.get("/healthz")

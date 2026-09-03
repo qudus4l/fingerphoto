@@ -15,6 +15,7 @@ logger = logging.getLogger("fingerphoto.api")
 
 CODE_STATUS = {
     ReasonCode.IDENTITY_NOT_FOUND: 404,
+    ReasonCode.PHOTO_NOT_FOUND: 404,
     ReasonCode.JOB_NOT_FOUND: 404,
     ReasonCode.IDENTITY_EXISTS: 409,
     ReasonCode.IMAGE_TOO_LARGE: 413,

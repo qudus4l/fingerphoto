@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Header, Request, UploadFile
+from fastapi.responses import Response
 
 from ... import store
 from ...errors import ReasonCode, StoreError
@@ -29,6 +30,21 @@ def get_identity(identity_uuid: str) -> dict:
     return store.get_identity(identity_uuid)
 
 
+@router.get("/v1/identities/{identity_uuid}/photos")
+def list_photos(identity_uuid: str) -> list[dict]:
+    return store.list_photos(identity_uuid)
+
+
+@router.get("/v1/identities/{identity_uuid}/photos/{filename}")
+def get_photo(identity_uuid: str, filename: str) -> Response:
+    data, media = store.original_photo_bytes(identity_uuid, filename)
+    return Response(
+        content=data,
+        media_type=media,
+        headers={"Cache-Control": "private, max-age=60"},
+    )
+
+
 @router.delete("/v1/identities/{identity_uuid}")
 def delete_identity(identity_uuid: str) -> dict:
     """GDPR/BIPA hard delete: templates, identity row, and original photos."""
@@ -44,6 +60,7 @@ async def enroll_photos(
     files: Annotated[list[UploadFile], File()],
     finger: Annotated[FingerPosition, Form()] = "unknown",
     best_of: Annotated[int | None, Form(ge=1, le=10)] = None,
+    guided: Annotated[bool, Form()] = False,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     info = store.get_identity(identity_uuid)  # 404 before decoding anything
@@ -57,7 +74,7 @@ async def enroll_photos(
     job = request.app.state.jobs.submit(
         "enroll",
         lambda: store.enroll_photos(identity_uuid, photos, finger=finger,
-                                    request_id=rid, best_of=best_of),
+                                    request_id=rid, best_of=best_of, guided=guided),
         idempotency_key=idempotency_key,
     )
     return accepted(job)

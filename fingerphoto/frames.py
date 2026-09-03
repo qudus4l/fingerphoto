@@ -205,6 +205,38 @@ def frame_score(bgr: np.ndarray, frame_shape: tuple[int, int] | None = None) -> 
     return best_score, best_strategy, detail
 
 
+def guided_frame_score(bgr: np.ndarray) -> tuple[float, str | None, dict]:
+    """Score a browser guide crop without trying to localize it a second time.
+
+    The guided capture contract says the upload is already the fingertip ROI.
+    Running ``crop_distal``/``crop_pad`` again made the live readiness check
+    disagree with guided enrollment, which consumes this same rectangle as a
+    full crop. Keep this fast (no Gabor enhancement), but use the same physical
+    scale band and pre-enhancement quality measurement as the final pipeline.
+    """
+    rep: dict = {}
+    detail = {"full": rep}
+    try:
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
+        lo, hi = ridge_period_band_for_fingertip(bgr.shape[1])
+        rep["crop_shape"] = list(bgr.shape[:2])
+        rep["band_px"] = (round(lo, 2), round(hi, 2))
+        period = estimate_ridge_period(gray, min_period=lo, max_period=hi)
+        rep["initial_period_px"] = round(period, 2)
+        scaled, _ = normalize_scale(gray, min(max(period, lo), hi))
+        q = ridge_quality(scaled)
+        rep["period_px"] = round(period, 2)
+        rep["quality"] = q.as_dict()
+        rep["score"] = round(q.score, 4)
+        if not q.valid:
+            rep["reason"] = "too_few_ridge_blocks"
+        return q.score, "full" if q.valid else None, detail
+    except (ValueError, cv2.error) as exc:
+        rep["reason"] = "no_ridge_period"
+        rep["error"] = exc.__class__.__name__
+        return 0.0, None, detail
+
+
 def image_candidates(
     uploads: list[tuple[str, np.ndarray, bytes | None]], score: bool
 ) -> list[Candidate]:

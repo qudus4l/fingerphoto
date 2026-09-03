@@ -6,87 +6,133 @@
 <title>Fingerphoto Capture</title>
 <style>
   :root{
-    --bg:#0d1013; --panel:#161b21; --line:#232b34; --text:#e8edf2;
-    --muted:#8b97a5; --ok:#3ddc97; --bad:#ef5f6b; --accent:#5aa9ff;
+    color-scheme:light;
+    --bg:#f4f7fb; --panel:#ffffff; --panel-subtle:#f8fafc;
+    --line:#dbe3ed; --line-strong:#c7d2df; --text:#172033;
+    --muted:#617087; --ok:#087a55; --ok-bg:#eaf8f2; --bad:#b4232e;
+    --bad-bg:#fff0f1; --accent:#1b5fc6; --accent-dark:#124996;
+    --shadow:0 12px 32px rgba(31,48,76,.10);
   }
   *{box-sizing:border-box}
-  html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--text);
-       font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       -webkit-font-smoothing:antialiased;
-       display:flex;flex-direction:column;
-       padding:env(safe-area-inset-top) 12px env(safe-area-inset-bottom);
-       overflow:hidden}
-  .row{display:flex;gap:8px;padding-top:10px;flex:0 0 auto}
-  input{flex:1;min-width:0;padding:9px 10px;border-radius:8px;
-        border:1px solid var(--line);background:var(--panel);color:var(--text);
-        font-size:15px}
-  input.missing{border-color:var(--bad)}
-  #stage{position:relative;background:#000;border-radius:12px;overflow:hidden;
-         border:1px solid var(--line);margin:10px auto 0;flex:0 0 auto}
+  html{min-height:100%;background:var(--bg)}
+  body{min-height:100%;margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.45 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;
+       padding:calc(env(safe-area-inset-top) + 18px) 18px
+               calc(env(safe-area-inset-bottom) + 18px);overflow:auto}
+  body::before{content:"";position:fixed;inset:0 0 auto;height:4px;background:var(--accent);z-index:20}
+  body>*{width:100%;max-width:720px;margin-left:auto;margin-right:auto}
+  header{padding:4px 2px 16px;flex:0 0 auto;border-bottom:1px solid var(--line)}
+  .brand-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  .brand{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:750;letter-spacing:.01em}
+  .brand-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;
+              background:var(--accent);color:white;font-size:17px;box-shadow:0 4px 10px rgba(27,95,198,.22)}
+  .environment{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid var(--line);
+               border-radius:999px;background:var(--panel);color:var(--muted);font-size:11px;font-weight:650}
+  .environment::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok)}
+  .eyebrow{font-size:11px;font-weight:750;letter-spacing:.11em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:26px;line-height:1.16;margin:5px 0 5px;letter-spacing:-.025em}
+  #mode-copy{font-size:14px;color:var(--muted);max-width:580px}
+  #stage{position:relative;background:#111827;border-radius:14px;overflow:hidden;
+         border:1px solid #b8c4d2;margin:14px auto 0;flex:0 0 auto;box-shadow:var(--shadow)}
+  #stage.ready{border-color:var(--ok);box-shadow:0 0 0 3px rgba(8,122,85,.16),var(--shadow)}
   video{display:block;width:100%;height:100%;object-fit:cover}
-  #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-  .checks{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;
-          margin-top:10px;flex:0 0 auto}
-  .check{background:var(--panel);border:1px solid var(--line);border-radius:9px;
-         padding:7px 9px}
+  #freeze{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:2}
+  #stage.frozen #freeze{display:block}
+  #stage.frozen video{visibility:hidden}
+  #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3}
+  #camera-tools{position:absolute;right:12px;top:12px;z-index:5}
+  #torch{display:inline-flex;align-items:center;justify-content:center;gap:7px;width:auto;min-width:106px;
+         padding:9px 12px;border:1px solid rgba(255,255,255,.42);border-radius:8px;
+         background:rgba(255,255,255,.94);color:#26354a;box-shadow:0 4px 14px rgba(0,0,0,.18);
+         font-size:13px;font-weight:700;backdrop-filter:blur(8px)}
+  #torch::before{content:"⚡";font-size:14px;color:#7a8798}
+  #torch.on{background:#fff7d6;border-color:#f0c94f;color:#5f4600}
+  #torch.on::before{color:#c88700}
+  #torch:disabled{opacity:.72;background:#eef2f6;color:#6c7888;border-color:#d6dde6;box-shadow:none}
+  #guide-state{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:4;
+               display:flex;align-items:center;gap:7px;max-width:calc(100% - 24px);
+               padding:8px 12px;border-radius:8px;background:rgba(17,24,39,.88);color:white;
+               backdrop-filter:blur(8px);font-size:12px;font-weight:600;white-space:nowrap}
+  #state-dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  #stage.ready #state-dot{background:#36d49b;box-shadow:0 0 0 5px rgba(54,212,155,.16)}
+  #holdbar{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.4);z-index:4}
+  #holdbar i{display:block;width:0;height:100%;background:#36d49b;transition:width .12s linear}
+  .checks{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;flex:0 0 auto}
+  .check{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 11px;
+         box-shadow:0 1px 2px rgba(31,48,76,.03)}
   .check .label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;
-                color:var(--muted)}
-  .check .val{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums}
-  .check.pass{border-color:rgba(61,220,151,.5)} .check.pass .val{color:var(--ok)}
+                color:var(--muted);font-weight:700}
+  .check .val{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:1px}
+  .check.pass{border-color:#a8d9c8;background:var(--ok-bg)} .check.pass .val{color:var(--ok)}
   .check.fail .val{color:var(--bad)}
-  #status{margin-top:9px;padding:9px 11px;border-radius:9px;background:var(--panel);
-          border:1px solid var(--line);font-size:14px;min-height:40px;
-          display:flex;align-items:center;flex:1 1 auto;overflow-y:auto;
-          white-space:pre-wrap;color:var(--muted)}
-  #status.err{border-color:var(--bad);color:#ffc4c9}
-  #status.good{border-color:rgba(61,220,151,.5);color:var(--ok)}
-  .actions{padding:9px 0 4px;flex:0 0 auto}
-  button{width:100%;padding:14px;border-radius:10px;border:0;font-size:17px;
-         font-weight:600;background:var(--accent);color:#08131f}
-  button:disabled{background:#26303b;color:#5d6875}
-  button.secondary{background:transparent;color:var(--muted);
-                   border:1px solid var(--line);margin-top:7px;font-size:14px;
+  #status{margin-top:10px;padding:12px 14px;border-radius:10px;background:var(--panel);
+          border:1px solid var(--line);font-size:14px;min-height:44px;
+          display:flex;align-items:center;flex:0 0 auto;max-height:120px;overflow-y:auto;
+          white-space:pre-wrap;color:var(--muted);box-shadow:0 1px 2px rgba(31,48,76,.03)}
+  #status.err{border-color:#efb5ba;background:var(--bad-bg);color:var(--bad)}
+  #status.good{border-color:#a8d9c8;background:var(--ok-bg);color:var(--ok)}
+  .actions{padding:10px 0 4px;flex:0 0 auto;margin-top:auto}
+  button{width:100%;padding:13px;border-radius:9px;border:1px solid transparent;font-size:16px;
+         font-weight:650;background:var(--accent);color:white;cursor:pointer;transition:.15s ease}
+  button:hover:not(:disabled){filter:brightness(.97)}
+  button:focus-visible{outline:3px solid rgba(27,95,198,.24);outline-offset:2px}
+  button:disabled{background:#e7ecf2;color:#8b97a6;cursor:not-allowed}
+  button.secondary{background:var(--panel);color:#344158;
+                   border:1px solid var(--line-strong);margin-top:7px;font-size:14px;
                    font-weight:500;padding:11px}
-  .sizer{display:flex;gap:6px;align-items:center;margin-top:8px;flex:0 0 auto}
-  .sizer button{width:46px;padding:8px;font-size:20px;background:var(--panel);
-                color:var(--text);border:1px solid var(--line)}
-  #sizelab{flex:1;text-align:center;font-size:12px;color:var(--muted);
-           font-family:ui-monospace,Menlo,monospace}
-  #meta{font-size:11px;color:#5d6875;text-align:center;padding-bottom:6px;
-        flex:0 0 auto;font-family:ui-monospace,Menlo,monospace}
-  #vidhint{font-size:11px;color:#5d6875;line-height:1.35;padding:6px 2px 0}
-  .modes{display:flex;gap:6px;padding-top:10px;flex:0 0 auto}
-  .mode{flex:1;padding:9px;border-radius:8px;font-size:15px;font-weight:600;
-        background:var(--panel);color:var(--muted);border:1px solid var(--line)}
-  .mode.on{background:var(--accent);color:#08131f;border-color:var(--accent)}
-  .mode.small{flex:0 0 auto;font-size:13px;padding:9px 9px}
-  #result{font-size:15px}
+  .sizer,.extras,#meta,#vidhint{display:none!important}
+  .modes{display:flex;gap:3px;padding:4px;margin-top:12px;flex:0 0 auto;
+         background:#e8edf4;border:1px solid #dbe2eb;border-radius:10px}
+  .mode{flex:1;padding:9px;border-radius:7px;font-size:14px;font-weight:650;
+        background:transparent;color:#58677b;border:0}
+  .mode.on{background:var(--panel);color:var(--accent-dark);box-shadow:0 1px 4px rgba(31,48,76,.12)}
+  .mode.small{flex:0 0 auto;font-size:13px;padding:9px}
+  #status{font-size:15px}
   details.trace{margin-top:6px}
-  details.trace summary{font-size:11px;color:#5d6875;cursor:pointer;list-style:none}
-  details.trace pre{font-size:10px;line-height:1.35;color:#7a8593;margin:5px 0 0;
+  details.trace summary{font-size:11px;color:#7b8798;cursor:pointer;list-style:none}
+  details.trace pre{font-size:10px;line-height:1.35;color:#68778b;margin:5px 0 0;
                     white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace}
-  #result .big{font-size:26px;font-weight:700;letter-spacing:-.02em;
+  #status .big{font-size:24px;font-weight:700;letter-spacing:-.02em;
                display:block;margin-bottom:2px}
-  #result .sub{font-size:13px;color:var(--muted);display:block}
+  #status .sub{font-size:13px;color:var(--muted);display:block}
+  .g-id{margin:0 0 8px;padding:14px;border-radius:10px;background:var(--panel);
+        border:1px solid var(--line);box-shadow:0 2px 8px rgba(31,48,76,.05)}
+  .g-id h2{font-size:15px;margin:0 0 3px;font-weight:600}
+  .g-meta{font-size:12px;color:var(--muted)}
+  .g-empty{color:var(--muted);padding:24px 8px;text-align:center}
+  #gallery{flex:1 1 auto;overflow-y:auto;margin-top:10px}
+  @media(max-width:520px){
+    body{padding-left:12px;padding-right:12px}
+    .brand-row{margin-bottom:14px}.environment{font-size:10px}
+    h1{font-size:23px}.checks{gap:5px}.check{padding:8px 7px}
+    .check .label{font-size:9px}.check .val{font-size:14px}
+  }
 </style>
 </head>
 <body>
+  <header>
+    <div class="brand-row">
+      <div class="brand"><span class="brand-mark">F</span><span>Fingerphoto</span></div>
+      <span class="environment">Secure capture</span>
+    </div>
+    <div class="eyebrow">FINGERPHOTO</div>
+    <h1 id="mode-title">Add a fingerprint</h1>
+    <div id="mode-copy">Place the same finger twice. It is saved only when both scans match.</div>
+  </header>
   <div class="modes">
-    <button class="mode on" data-mode="enroll">Enroll</button>
-    <button class="mode" data-mode="identify">Identify</button>
-    <button class="mode small" id="lens" title="Switch camera">Lens ▸</button>
-    <button class="mode small" id="torch" title="Torch" style="display:none">Light</button>
-    <button class="mode small" id="zoom" title="Zoom" style="display:none">1×</button>
-  </div>
-  <div class="row">
-    <input id="name" placeholder="Name" autocomplete="off" autocapitalize="words">
-    <input id="key" placeholder="API key" type="password" autocomplete="off"
-           style="flex:0 0 42%">
+    <button class="mode" data-mode="prints">Enrolled</button>
+    <button class="mode on" data-mode="capture">Add print</button>
+    <button class="mode" data-mode="verify">Verify</button>
   </div>
 
   <div id="stage">
     <video id="v" playsinline muted autoplay></video>
+    <canvas id="freeze" aria-hidden="true"></canvas>
+    <div id="camera-tools">
+      <button type="button" id="torch" title="Turn camera flash on or off"
+              aria-pressed="false" disabled>Flash unavailable</button>
+    </div>
     <svg id="overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
       <defs><mask id="cut">
         <rect width="100" height="100" fill="#fff"/>
@@ -96,15 +142,17 @@
       <path id="silh" fill="none" stroke="#5aa9ff" stroke-width="2.5"
             vector-effect="non-scaling-stroke"/>
     </svg>
+    <div id="guide-state"><span id="state-dot"></span><span id="state-text">Looking for fingertip</span></div>
+    <div id="holdbar"><i></i></div>
   </div>
 
-  <div class="sizer">
+  <div class="sizer extras">
     <button id="smaller" title="Smaller outline">–</button>
     <div id="sizelab">outline</div>
     <button id="bigger" title="Bigger outline">+</button>
   </div>
 
-  <div class="checks">
+  <div class="checks" id="meters">
     <div class="check" id="c-fill"><div class="label">Fill</div><div class="val">–</div></div>
     <div class="check" id="c-focus"><div class="label">Focus</div><div class="val">–</div></div>
     <div class="check" id="c-light"><div class="label">Light</div><div class="val">–</div></div>
@@ -113,29 +161,23 @@
 
   <div id="status">Starting camera…</div>
 
+  <div id="gallery" hidden></div>
+
   <div class="actions">
-    <button id="shoot">Capture</button>
-    <!-- The live path is limited to what getUserMedia exposes: no tap-to-focus
-         and no automatic macro lens switch. Every photo in this project that
-         actually matches was taken with the phone's own Camera app, which has
-         both. So offer that route directly. -->
-    <button id="upload" class="secondary">Use a photo from the Camera app</button>
-    <!-- The video route is the best capture this project has on an iPhone: the
-         Camera app's video mode gives a CONTINUOUS torch, tap-to-focus and 4K,
-         none of which getUserMedia exposes to Safari. The server scores every
-         sampled frame and keeps only the few with real ridge structure, so a
-         few seconds of slow rocking beats one lucky shutter press.
-         On Android Chrome the Capture button does that search itself (see the
-         adaptive section), so this route is the fallback there, not the
-         recommendation. -->
-    <button id="uploadvid" class="secondary">Record a 3–5 s video in the Camera app</button>
-    <div id="vidhint">Video mode · flash ON (it stays on as a torch) · tap the
-      fingertip to focus · fill the outline · rock slowly nearer and further ·
-      4K if offered</div>
+    <button id="shoot" class="secondary">Pause auto-capture</button>
+    <div class="extras">
+      <button class="mode small" id="lens" title="Switch camera">Lens ▸</button>
+      <button class="mode small" id="zoom" title="Zoom">1×</button>
+      <button id="upload" class="secondary">Use a photo from the Camera app</button>
+      <button id="uploadvid" class="secondary">Record a 3–5 s video in the Camera app</button>
+      <div id="vidhint">Video mode · flash ON (it stays on as a torch) · tap the
+        fingertip to focus · fill the outline · rock slowly nearer and further ·
+        4K if offered</div>
+    </div>
     <input type="file" id="pick" accept="image/*" style="display:none">
     <input type="file" id="pickvid" accept="video/*" style="display:none">
   </div>
-  <div id="meta"></div>
+  <div id="meta" class="extras"></div>
 
 <script>
 // --- Geometry -------------------------------------------------------------
@@ -156,7 +198,7 @@ let targetPx = +localStorage.getItem('fp_target') || DEFAULT_TARGET_PX;
 // Only the WIDTH carries the scale; crop_distal finds the pad in the full
 // photo regardless, so height is pure ergonomics.
 const ASPECT = 1.45, MIN_FRAC = 0.12, MAX_FRAC = 0.86;
-const MIN_FILL = 0.55, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
+const MIN_FILL = 0.62, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
 // Focus is judged relative to the sharpest frame seen IN THE LAST ~1.5 s, not
 // against an absolute number (sensor- and scene-dependent: a good hand-held
 // photo scored 16.6, a good guided capture 5.7, a blurred one 3.2) and not
@@ -166,13 +208,24 @@ const MIN_FILL = 0.55, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
 // rolling window can always be satisfied by holding still.
 const FOCUS_WIN = 90, FOCUS_FLOOR = 3.0, FOCUS_RATIO = 0.72;
 const BURST = 5, BURST_MS = 110;
+const MAX_MOTION = 7.0, AUTO_HOLD_MS = 0, RIDGE_PASSES_REQUIRED = 1;
+const RIDGE_WINDOW_MS = 5000, RIDGE_MAX_WAIT_MS = 6500;
 
+/*__FP_CONFIG__*/
+const FP = window.__FP_CONFIG__ || {name:'Test-Fingerprint'};
+// The real credential is an HttpOnly same-site cookie. This non-secret marker
+// only lets the capture loops know that the page was bootstrapped normally.
+const key = 'capture-session';
 const $ = id => document.getElementById(id);
 const video = $('v'), stage = $('stage');
 const work = document.createElement('canvas');
 const wctx = work.getContext('2d', {willReadFrequently:true});
-let box = null, busy = false, sticky = '', mode = 'enroll';
+let box = null, busy = false, sticky = '', mode = 'capture';
 let focusHist = [];
+let previousGray = null, autoArmed = true, readySince = 0, autoStarting = false;
+let enrollSamples = [], awaitingRemoval = false, absentSince = 0;
+// Frozen guide crop from the exact tick where fill/focus/light/ridge all passed.
+let snapFrame = null;
 
 function say(msg, kind){          // status the tick loop will not clobber
   const el = $('status');
@@ -188,13 +241,130 @@ function show(html, kind){        // rich result (identify verdict)
 
 function setMode(m){
   mode = m;
-  // Scoped to the mode buttons: the torch and zoom buttons live in the same
-  // row and carry their own 'on' state, which a blanket query would clear.
+  enrollSamples = [];
+  awaitingRemoval = false;
+  absentSince = 0;
   document.querySelectorAll('.mode[data-mode]').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === m));
-  $('name').style.display = (m === 'enroll') ? '' : 'none';
-  $('key').style.flex = (m === 'enroll') ? '0 0 42%' : '1';
+  const prints = m === 'prints';
+  $('stage').style.display = prints ? 'none' : '';
+  $('meters').style.display = prints ? 'none' : '';
+  $('status').style.display = prints ? 'none' : '';
+  $('shoot').style.display = prints ? 'none' : '';
+  $('gallery').hidden = !prints;
+  $('mode-title').textContent = prints ? 'Enrolled identities'
+    : m === 'verify' ? 'Verify a fingerprint' : 'Add a fingerprint';
+  $('mode-copy').textContent = prints ? 'Template records only. Fingerprint photos are not retained.'
+    : m === 'verify'
+      ? 'Place the fingertip inside the guide. We will identify it automatically.'
+      : 'Place the same finger twice. It is saved only when both scans match.';
   sticky = '';
+  if(prints){ setArmed(false); loadPrints(); }
+  else setArmed(true);
+}
+
+async function loadPrints(){
+  const el = $('gallery');
+  el.innerHTML = '<div class="g-empty">Loading…</div>';
+  try{
+    const list = await (await sessionFetch('/v1/identities')).json();
+    if(!list.length){
+      el.innerHTML = '<div class="g-empty">Nothing in the system yet. Add a print first.</div>';
+      return;
+    }
+    el.innerHTML = '';
+    for(const ident of list){
+      const block = document.createElement('div');
+      block.className = 'g-id';
+      block.innerHTML = `<h2>${esc(ident.name)}</h2><div class="g-meta">`
+        + `${ident.templates||0} derived template${ident.templates===1?'':'s'} · `
+        + `${ident.photos||0} source scan${ident.photos===1?'':'s'} · no photo retained</div>`;
+      el.appendChild(block);
+    }
+  }catch(e){
+    el.innerHTML = `<div class="g-empty">Could not load prints: ${esc(e.message)}</div>`;
+  }
+}
+
+function personName(){ return (FP.name || 'Test-Fingerprint').trim() || 'Test-Fingerprint'; }
+function isVerify(){ return mode === 'verify'; }
+function shootLabel(){ return autoArmed ? 'Pause auto-capture' : 'Start auto-capture'; }
+
+function setArmed(on){
+  autoArmed = !!on;
+  readySince = 0;
+  resetRidgeReadings();
+  if(on) unfreezeStage();
+  $('holdbar').querySelector('i').style.width = '0%';
+  $('shoot').textContent = shootLabel();
+  if(!autoArmed && !busy){
+    $('stage').classList.remove('ready');
+    $('state-text').textContent = 'Auto-capture paused';
+    say('Auto-capture paused. Tap below when you are ready.');
+  }
+}
+
+function freezeStage(){
+  const f = $('freeze');
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(!vw) return;
+  f.width = vw; f.height = vh;
+  f.getContext('2d').drawImage(video, 0, 0);
+  stage.classList.add('frozen');
+}
+
+function unfreezeStage(){
+  stage.classList.remove('frozen');
+}
+
+// Lock pixels on this turn of the event loop: freeze the live view, keep an
+// already-encoded ridge-validated JPEG when we have one, and only then start
+// the async enroll/verify path. That removes the "Capturing…" then wait-to-
+// shutter feeling caused by re-cropping and re-encoding after the meters pass.
+function commitCapture(preferred){
+  if(busy || autoStarting || !autoArmed) return false;
+  const ready = preferred && preferred.blob ? preferred
+    : (bestRidge && bestRidge.blob && Date.now() - bestRidge.at < RIDGE_WINDOW_MS
+        ? bestRidge : null);
+  if(ready && ready.blob){
+    snapFrame = {
+      at: Date.now(),
+      canvas: ready.canvas,
+      blob: ready.blob,
+      blobP: Promise.resolve(ready.blob),
+      score: ready.score,
+    };
+  }else{
+    let canvas = cropCanvas(box);
+    if(!canvas) return false;
+    if(canvas.width > 1200){
+      const scaled = document.createElement('canvas');
+      scaled.width = 1200;
+      scaled.height = Math.round(canvas.height * 1200 / canvas.width);
+      scaled.getContext('2d').drawImage(canvas, 0, 0, scaled.width, scaled.height);
+      canvas = scaled;
+    }
+    snapFrame = {
+      at: Date.now(),
+      canvas,
+      blob: null,
+      blobP: new Promise(r => canvas.toBlob(b => r(b), 'image/jpeg', 0.88)),
+      score: null,
+    };
+    snapFrame.blobP.then(b => { if(snapFrame) snapFrame.blob = b; });
+  }
+  freezeStage();
+  busy = true;
+  autoStarting = true;
+  autoArmed = false;
+  $('stage').classList.add('ready');
+  $('holdbar').querySelector('i').style.width = '100%';
+  $('state-text').textContent = 'Locked';
+  say('Frame locked', 'good');
+  const firstEnroll = !isVerify() && enrollSamples.length === 0;
+  const run = firstEnroll ? collectFirstEnrollmentScan() : capture(null, 'auto');
+  Promise.resolve(run).finally(() => { autoStarting = false; });
+  return true;
 }
 
 function layout(){
@@ -203,8 +373,8 @@ function layout(){
   // Size the stage explicitly so it always fits the viewport AND keeps the
   // stream's exact aspect — the overlay's percentages then map 1:1 onto frame
   // coordinates, which the fill/focus sampling depends on.
-  const maxW = document.body.clientWidth - 24;
-  const maxH = Math.max(200, window.innerHeight * 0.42);
+  const maxW = Math.min(720, document.body.clientWidth - 24);
+    const maxH = Math.max(240, window.innerHeight * 0.52);
   let w = maxW, h = w * vh / vw;
   if(h > maxH){ h = maxH; w = h * vw / vh; }
   stage.style.width = Math.round(w) + 'px';
@@ -276,9 +446,16 @@ function analyse(){
     if(isSkin[i]) continue;
     blap += Math.abs(4*gray[i]-gray[i-1]-gray[i+1]-gray[i-w]-gray[i+w]); bn++;
   }
+  let motion = Infinity;
+  if(previousGray && previousGray.length === gray.length){
+    let delta = 0;
+    for(let i=0; i<gray.length; i++) delta += Math.abs(gray[i] - previousGray[i]);
+    motion = delta / gray.length;
+  }
+  previousGray = gray;
   const focus = ln ? lap/ln : 0, bg = bn ? blap/bn : 0;
   return {fill: skin/n, focus, bg, lum, luma: lum/n, clip: clipped/n,
-          bgSharper: bg > focus * 1.6 && bn > n*0.15};
+          motion, bgSharper: bg > focus * 1.6 && bn > n*0.15};
 }
 
 function setCheck(el, ok, text){
@@ -286,79 +463,118 @@ function setCheck(el, ok, text){
   el.querySelector('.val').textContent = text;
 }
 
+async function collectFirstEnrollmentScan(){
+  busy = true;
+  sticky = '1';
+  $('shoot').disabled = true;
+  $('state-text').textContent = 'Locked';
+  say('Frame locked. Preparing scan 1…', 'good');
+  try{
+    enrollSamples = await autoCapture('enrollment-scan-1');
+    unfreezeStage();
+    awaitingRemoval = true;
+    absentSince = 0;
+    $('state-text').textContent = 'Lift finger completely';
+    say('First scan captured. Lift your finger, then place the same finger back for confirmation.');
+  }catch(e){
+    enrollSamples = [];
+    unfreezeStage();
+    show(`<div><span class="big">Capture failed</span><span class="sub">${esc(e.message)}</span></div>`, 'err');
+    setArmed(false);
+  }finally{
+    busy = false;
+    autoStarting = false;
+    $('shoot').disabled = awaitingRemoval;
+    $('shoot').textContent = awaitingRemoval ? 'Waiting for finger to lift' : shootLabel();
+  }
+}
+
 function tick(){
   const m = analyse();
   if(m && !busy){
+    if(awaitingRemoval){
+      const absent = m.fill < MIN_FILL * 0.45;
+      if(absent && !absentSince) absentSince = performance.now();
+      if(!absent) absentSince = 0;
+      $('stage').classList.remove('ready');
+      $('holdbar').querySelector('i').style.width = absent ? '60%' : '0%';
+      $('state-text').textContent = absent ? 'Finger removed' : 'Lift finger completely';
+      say(absent ? 'Good. Place the same finger back for scan 2 of 2.'
+                 : 'First scan captured. Lift your finger completely.');
+      if(absentSince && performance.now() - absentSince >= 500){
+        awaitingRemoval = false;
+        absentSince = 0;
+        sticky = '';
+        setArmed(true);
+        $('shoot').disabled = false;
+        $('state-text').textContent = 'Place same finger again';
+        say('Place the same finger back for scan 2 of 2.');
+      }
+      requestAnimationFrame(tick);
+      return;
+    }
     focusHist.push(m.focus);
     if(focusHist.length > FOCUS_WIN) focusHist.shift();
     let recent = 0;
     for(const f of focusHist) if(f > recent) recent = f;
     const focusBar = Math.max(FOCUS_FLOOR, recent * FOCUS_RATIO);
-    // Gate on skin sharpness only. The background/skin ratio looked promising
-    // but misfires: a capture that worked scored 1.61 while one that failed
-    // scored 1.45, so it is shown as advice, never used to block.
     const fillOk = m.fill >= MIN_FILL;
     const focusOk = m.focus >= focusBar;
     const lightOk = m.luma>=MIN_LUMA && m.luma<=MAX_LUMA && m.clip<=MAX_CLIP;
-    setCheck($('c-fill'), fillOk, Math.round(m.fill*100)+'%');
-    setCheck($('c-focus'), focusOk, m.focus.toFixed(1));
-    setCheck($('c-light'), lightOk, Math.round(m.luma));
-    // Only spend uplink on frames that are framed and lit well enough for the
-    // answer to be meaningful.
-    ridgeWorthIt = fillOk && lightOk;
-    const ridgeOk = ridgeScore != null && ridgeScore >= ridgeGate;
-    setCheck($('c-ridge'), ridgeOk,
-             ridgeScore == null ? '–' : ridgeScore.toFixed(2));
-    const hasName = mode === 'identify' || !!$('name').value.trim();
-    $('name').className = hasName ? '' : 'missing';
-    // The shutter stays locked until the frame is usable — a bad photo enrolled
-    // is worse than no photo, because it pollutes the gallery silently. The
-    // gate is only legitimate because every check is REACHABLE: focus is
-    // measured against the last 1.5 s, so holding still always satisfies it.
-    // Any future check added here must have the same property.
-    //
-    // Two of them are dropped where the CAMERA can satisfy them instead of the
-    // user: focus when we can drive the lens ourselves (holding still cannot
-    // move a lens parked at the wrong distance, but a sweep can), and light
-    // when there is a torch to switch on. Both stay reachable — by the machine.
-    const focusMine = canFocus, lightMine = adaptive && hasTorch;
-    const ready = fillOk && (focusOk || focusMine) && (lightOk || lightMine) && hasName;
-    $('shoot').disabled = !ready;
-    // Name the blocking check on the button itself, so the reason is visible
-    // without reading the status line.
-    $('shoot').textContent = ready
-      ? (adaptive ? (mode === 'enroll' ? 'Auto capture & enrol' : 'Auto identify')
-                  : (mode === 'enroll' ? 'Capture & enrol' : 'Identify'))
-      : !hasName ? 'Enter a name first'
-      : !fillOk  ? 'Move closer'
-      : (!focusOk && !focusMine) ? 'Hold steady…'
-      : (m.clip > MAX_CLIP ? 'Too much glare' : 'Needs more light');
-    if(!sticky){
-      say(!hasName ? 'Enter a name above, then capture'
-        : !fillOk  ? 'Move closer — fill the outline edge to edge'
-        : (!focusOk && !focusMine) ? (m.bgSharper
-             ? 'Background looks sharper than your thumb — rest it on a desk or '
-               + 'your other palm so there is nothing far away for the camera '
-               + 'to lock onto.'
-             : 'Not sharp yet — rock the phone slowly nearer and further. If it '
-               + 'never sharpens, press Lens to try another camera (an ultrawide '
-               + 'focuses much closer), or – to shrink the outline.')
-        : (!lightOk && !lightMine)
-            ? (m.clip > MAX_CLIP ? 'Too much glare — angle away from the light'
-                                 : 'Too dark — add light or use a lamp')
-        // Everything the browser can measure is green, but the server says
-        // there are no ridges. That is the iPhone failure mode exactly, and
-        // no amount of holding still fixes it — send them to the video route.
-        // Where the sweep exists it IS the fix, so the advice changes.
-        : (ridgeScore != null && !ridgeOk && !adaptive)
-            ? 'Sharp, but no ridges resolved (' + ridgeScore.toFixed(2) + ' of '
-              + ridgeGate.toFixed(2) + ') — record a video with the button below '
-              + 'instead: flash stays on and you can tap to focus.'
-        : adaptive ? 'Ready — hold the thumb in the outline and press capture. '
-                   + 'The phone will search the focus and the light itself.'
-        : 'Looks good — hold still and capture',
-        ready ? 'good' : '');
+    const steadyOk = m.motion <= MAX_MOTION;
+    setCheck($('c-fill'), fillOk, fillOk ? 'Good' : Math.round(m.fill*100)+'%');
+    setCheck($('c-focus'), focusOk && steadyOk, focusOk && steadyOk ? 'Good' : 'Wait');
+    setCheck($('c-light'), lightOk, lightOk ? 'Good' : (m.clip>MAX_CLIP ? 'Glare' : 'Adjust'));
+    // The server scores this exact guide crop. Two good reads inside a rolling
+    // window confirm it; one noisy response no longer erases all progress.
+    const now = Date.now();
+    const localReady = fillOk && focusOk && steadyOk && lightOk;
+    ridgeWorthIt = autoArmed && localReady;
+    if(localReady){
+      ridgeLastLocalGoodAt = now;
+      if(!ridgeWaitingSince) ridgeWaitingSince = now;
+    }else if(now - ridgeLastLocalGoodAt > 1200){
+      ridgeWaitingSince = 0;
     }
+    ridgeSamples = ridgeSamples.filter(s => now - s.at < RIDGE_WINDOW_MS);
+    ridgePasses = ridgeSamples.filter(s => s.passed).length;
+    const ridgeFresh = ridgeSamples.length > 0;
+    const confirmed = ridgeFresh && ridgePasses >= RIDGE_PASSES_REQUIRED;
+    // The live score is a fast pre-check, not the enrollment verdict. Never
+    // trap a person forever: after several readings, submit the best observed
+    // crop and let the authoritative extraction accept or reject it.
+    const bestAvailable = localReady && ridgeWaitingSince
+      && now - ridgeWaitingSince >= RIDGE_MAX_WAIT_MS
+      && ((ridgeSamples.length >= 3 && bestRidge) || ridgeFailures >= 3);
+    const ridgeOk = confirmed || !!bestAvailable;
+    setCheck($('c-ridge'), ridgeOk,
+      ridgeOk ? 'Ready' : ridgeScore == null ? 'Checking'
+      : ridgePasses ? 'Confirming' : `${Math.round(100*ridgeScore/Math.max(ridgeGate,.001))}%`);
+
+    const guaranteed = fillOk && focusOk && steadyOk && lightOk && ridgeOk;
+    $('stage').classList.toggle('ready', (guaranteed && autoArmed) || stage.classList.contains('frozen'));
+    if(!guaranteed && !busy && !autoStarting){ readySince = 0; snapFrame = null; }
+    else if(!readySince) readySince = performance.now();
+    const held = readySince ? performance.now() - readySince : 0;
+    const localPassed = [fillOk, focusOk && steadyOk, lightOk].filter(Boolean).length;
+    const baseProgress = (localPassed + (ridgePasses / RIDGE_PASSES_REQUIRED)) / 4;
+    const progress = guaranteed || stage.classList.contains('frozen') ? 1
+      : Math.min(.9, baseProgress);
+    $('holdbar').querySelector('i').style.width = Math.round(progress*100) + '%';
+
+    let guide = 'Reading fingerprint';
+    if(!autoArmed && !busy) guide = 'Auto-capture paused';
+    else if(busy || stage.classList.contains('frozen')) guide = 'Locked';
+    else if(!fillOk) guide = 'Fit fingertip inside guide';
+    else if(!focusOk || !steadyOk) guide = 'Hold still, focusing';
+    else if(!lightOk) guide = m.clip > MAX_CLIP ? 'Tilt away from glare' : 'Adjust the light';
+    else if(!ridgeOk) guide = ridgeAdvice || (ridgePasses ? 'Confirming ridge detail' : 'Reading ridge detail');
+    else guide = 'All green: locking frame';
+    $('state-text').textContent = guide;
+
+    if(!sticky && autoArmed) say(guide, guaranteed ? 'good' : '');
+    if(autoArmed && guaranteed && held >= AUTO_HOLD_MS && !autoStarting && !busy)
+      commitCapture(bestRidge);
   }
   requestAnimationFrame(tick);
 }
@@ -366,9 +582,22 @@ function tick(){
 let cams = [], camIdx = 0, curStream = null;
 let hasTorch = false, torchOn = false;
 
+function updateFlashControl(){
+  const button = $('torch');
+  button.disabled = !hasTorch;
+  button.classList.toggle('on', hasTorch && torchOn);
+  button.setAttribute('aria-pressed', torchOn ? 'true' : 'false');
+  button.setAttribute('aria-label', hasTorch
+    ? `Turn camera flash ${torchOn ? 'off' : 'on'}`
+    : 'Camera flash unavailable');
+  button.textContent = hasTorch ? `Flash: ${torchOn ? 'On' : 'Off'}` : 'Flash unavailable';
+}
+
 async function toggleTorch(){
-  if(busy) return;                 // the sweep owns the torch while it runs
+  if(busy || !hasTorch) return;
+  $('torch').disabled = true;
   await setTorchTo(!torchOn);
+  updateFlashControl();
   silhouettePath();
 }
 
@@ -405,6 +634,8 @@ async function start(deviceId){
     const track = stream.getVideoTracks()[0];
     let focusCtl = 'auto (no control)';
     camCaps = {}; canFocus = false; adaptive = false;
+    hasTorch = false; torchOn = false; updateFlashControl();
+    resetRidgeReadings();
     imageCapture = null; photoCaps = null; stillSize = null; stillsBroken = false;
     focusNow = null; evNow = 0; zoomNow = 1; userZoom = 1;
     try{
@@ -432,17 +663,11 @@ async function start(deviceId){
                     && caps.focusDistance.max > 0);
       if(canFocus)
         focusCtl = `manual ${fmt(caps.focusDistance.min)}–${fmt(caps.focusDistance.max)}m`;
-      // Torch. Android Chrome exposes it; iOS Safari does not expose one at
-      // all, so the button only appears where the browser actually offers it —
-      // never claim flash we cannot deliver. Flash is the single biggest
-      // lever on ridge contrast, so turn it on by default when we have it.
+      // Never toggle the torch as part of capture. The guarantee is evaluated
+      // on the stable live image the user can actually see.
       hasTorch = !!(caps && caps.torch);
-      if(hasTorch){
-        try{ await track.applyConstraints({advanced:[{torch:true}]}); torchOn = true; }
-        catch(e){ torchOn = false; }
-      }
-      $('torch').style.display = hasTorch ? '' : 'none';
-      $('torch').classList.toggle('on', torchOn);
+      torchOn = !!(track.getSettings && track.getSettings().torch);
+      updateFlashControl();
       if(caps && caps.zoom){
         zoomNow = userZoom = track.getSettings().zoom || caps.zoom.min || 1;
         $('zoom').style.display = '';
@@ -451,6 +676,7 @@ async function start(deviceId){
         $('zoom').style.display = 'none';
       }
     }catch(e){ focusCtl = 'auto (constraint rejected)'; }
+    updateFlashControl();
     // A real still, not a preview frame: Chromium builds a SEPARATE capture
     // request that re-applies focus, torch and exposure, so a still taken
     // mid-sweep is shot at the settings we searched for. It falls back to the
@@ -467,9 +693,7 @@ async function start(deviceId){
         stillSize = pickStill(photoCaps);
       }
     }catch(e){ imageCapture = null; photoCaps = null; stillSize = null; }
-    // The sweep needs at least one knob worth turning. Where there is none —
-    // every iOS browser, most desktops — the Capture button keeps the burst.
-    adaptive = canFocus || hasTorch;
+    adaptive = false;
     window.__focusCtl = focusCtl;
     window.__torch = hasTorch ? (torchOn ? 'on' : 'off') : 'unavailable';
     window.__zoom = (camCaps && camCaps.zoom) ? fmt(zoomNow,1) + '×' : '';
@@ -539,9 +763,31 @@ async function burst(){
   return blobs;
 }
 
+let sessionRenewal = null;
+
+async function renewCaptureSession(){
+  if(!sessionRenewal){
+    sessionRenewal = fetch('/capture/session', {
+      method:'POST', cache:'no-store', body:'',
+      headers:{'Content-Type':'text/plain'},
+    })
+      .then(r => r.ok)
+      .catch(() => false)
+      .finally(() => { sessionRenewal = null; });
+  }
+  return sessionRenewal;
+}
+
+async function sessionFetch(url, options){
+  let response = await fetch(url, options);
+  if(response.status === 401 && await renewCaptureSession())
+    response = await fetch(url, options);
+  return response;
+}
+
 // XHR, not fetch: a 4K clip is 15-35 MB and a silent multi-second wait reads
 // as a hang. Resolves like a trimmed-down fetch Response.
-function upload(url, fd, H, onProgress){
+function uploadOnce(url, fd, H, onProgress){
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url);
@@ -559,11 +805,20 @@ function upload(url, fd, H, onProgress){
   });
 }
 
+async function upload(url, fd, H, onProgress){
+  let response = await uploadOnce(url, fd, H, onProgress);
+  if(response.status === 401 && await renewCaptureSession())
+    response = await uploadOnce(url, fd, H, onProgress);
+  return response;
+}
+
 const mb = n => (n/1048576).toFixed(1);
 
 const FRIENDLY = {
   QUALITY_TOO_LOW: 'Too few ridge features to enrol. Get closer, tap to focus, and '
     + 'add light — avoid glare straight off the skin.',
+  ENROLLMENT_MISMATCH: 'The two scans did not match strongly enough. Use the same finger, '
+    + 'lift it fully between scans, and try again.',
   // The server distinguishes "no ridges were resolved at all" from "ridges were
   // read but yielded too few minutiae"; only the first is a re-shoot.
   QUALITY_NO_RIDGES: 'No ridge pattern could be resolved — the photo has skin but '
@@ -575,7 +830,7 @@ const FRIENDLY = {
   VIDEO_TOO_LONG: 'That clip is too long — 3 to 5 seconds is plenty.',
   NO_FINGER_FOUND: 'Could not find a fingertip. Fill the outline with just '
     + 'your thumb, plain background behind it.',
-  GALLERY_EMPTY: 'Nobody is enrolled yet — enrol first.',
+  GALLERY_EMPTY: 'Nothing in the system yet — capture a print first.',
   UNREADABLE_IMAGE: 'The capture did not decode. Try again.',
   IMAGE_TOO_LARGE: 'Image too large for the server limit.',
 };
@@ -606,14 +861,17 @@ function failureCard(code, detail, selection){
 
 async function poll(jobId, H, label, hint){
   for(let i=0;;i++){
-    await new Promise(r=>setTimeout(r, 2500));
-    const j = await (await fetch(`/v1/jobs/${jobId}`, {headers:H})).json();
+    const response = await sessionFetch(`/v1/jobs/${jobId}`, {headers:H});
+    if(!response.ok) throw new Error(response.status === 401
+      ? 'capture session could not be renewed' : `job status failed (HTTP ${response.status})`);
+    const j = await response.json();
     if(j.status === 'succeeded') return j.result;
     if(j.status === 'failed'){
       const e = new Error(j.error?.detail || 'job failed');
       e.code = j.error?.reason_code; throw e;
     }
-    say(`${label}… ${(i*2.5+2.5)|0}s (${hint || 'takes 10–60s'})`);
+    say(`${label}… ${(i*0.4)|0}s (${hint || 'takes 10–60s'})`);
+    await new Promise(r=>setTimeout(r, 400));
   }
 }
 
@@ -621,88 +879,75 @@ async function poll(jobId, H, label, hint){
 // that is how a photo or a video from the Camera app enters the same pipeline.
 // `kind` is 'photo' | 'video' | 'burst' and only affects the copy.
 async function capture(source, kind){
-  if(busy) return;
-  const name = $('name').value.trim(), key = $('key').value.trim();
-  if(mode === 'enroll' && !name){
-    sticky='1'; say('Enter a name first, then capture.', 'err');
+  // commitCapture() sets busy before calling us so the tick loop cannot steal
+  // the locked frame; allow that re-entry when a snap is already waiting.
+  if(busy && !snapFrame) return;
+  const name = personName();
+  if(!key){
+    sticky='1'; say('The capture session is unavailable. Reload the page.', 'err');
     setTimeout(()=>{sticky='';}, 2500); return;
   }
-  if(key) localStorage.setItem('fp_key', key);
   busy = true; sticky = '1';
   $('shoot').disabled = true; $('upload').disabled = true; $('uploadvid').disabled = true;
   $('shoot').textContent = 'Working…';
-  const H = {'X-API-Key': key};
-  const isVideo = kind === 'video';
+  const H = {};
   try{
-    // Each entry is {blob, name}. The burst sends five; an upload sends one.
-    let parts;
+    let parts, used = kind;
     if(source){
       lastShot = null; shotByName = {};
+      unfreezeStage();
       const [file, fname] = await source();
       parts = [{blob: file, name: fname}];
       say(`Read ${mb(file.size)} MB from ${fname}…`);
-    }else if(kind === 'auto'){
-      // The camera searches its own focus and light; what comes back is a
-      // handful of candidates for the server to choose between.
-      lastShot = null; shotByName = {};
-      parts = await autoCapture();
-      say(`Captured ${parts.length} frames — uploading…`);
     }else{
-      say('Capturing burst…');
-      parts = await burst();
+      lastShot = null; shotByName = {};
+      parts = await autoCapture(
+        !isVerify() && enrollSamples.length ? 'enrollment-scan-2' : 'fingerprint-probe'
+      );
+      if(parts.length === 1 && /^clip\./.test(parts[0].name)) used = 'video';
+      if(!isVerify() && enrollSamples.length) parts = enrollSamples.concat(parts);
+      say(used === 'video' ? 'Recorded. Uploading…' : 'Locked. Uploading…');
     }
+    const isVideo = used === 'video';
     const total = parts.reduce((n,p)=>n+p.blob.size, 0);
     const fd = new FormData();
     for(const p of parts) fd.append('files', p.blob, p.name);
-    // A burst is one finger photographed five times, so exactly one frame
-    // should win. A video is scored by the server's own per-clip budget.
-    if(!source) fd.append('best_of', '1');
+    if(!source && !isVideo && isVerify()) fd.append('best_of', '1');
+    fd.append('guided', !source && !isVideo ? 'true' : 'false');
     const onProg = (loaded, tot) =>
       say(`Uploading… ${mb(loaded)} / ${mb(tot)} MB`);
-    const wait = isVideo ? 'Scoring frames' : (mode === 'identify' ? 'Matching' : 'Extracting template');
-    const hint = isVideo ? 'takes 30–90s'
-               : kind === 'auto' ? 'takes 20–60s' : 'takes 10–60s';
+    const wait = isVideo ? 'Scoring frames' : (isVerify() ? 'Verifying' : 'Adding to system');
+    const hint = isVideo ? 'takes 30–90s' : (isVerify() ? 'about 5 seconds' : 'about 7 seconds');
 
-    if(mode === 'identify'){
+    if(isVerify()){
       say(`Sending ${mb(total)} MB…`);
       const r = await upload('/v1/identify', fd, H, onProg);
-      if(r.status === 401) throw new Error('auth failed — check the API key');
+      if(r.status === 401) throw new Error('capture session expired — reload the page');
       if(!r.ok) throw problemError(r);
       const res = await poll(r.json.job_id, H, wait, hint);
-      const runner = res.scores[1];
-      // Report how many frames were SCORED, not just how many were extracted:
-      // "best of 5" is the number that tells the user selection did its job.
-      const scored = (res.selection && res.selection.candidates) || 0;
-      const used = res.frames && scored > 1
-        ? `${res.frames.used} of ${scored} frames used · `
-        : '';
-      const sub = used
-                  + (runner ? `next closest ${runner.name} at ${runner.score}` : 'only one enrolled')
-                  + ` · threshold ${res.threshold}`;
       if(res.match)
-        show(`<div><span class="big">✓ ${esc(res.match.name)}</span>`
-           + `<span class="sub">score ${res.match.score} — ${sub}</span>`
+        show(`<div><span class="big">Fingerprint belongs to ${esc(res.match.name)}</span>`
+           + `<span class="sub">Verified · score ${res.match.score} · ${res.processing_s ?? '–'}s processing</span>`
            + `${traceHtml()}</div>`, 'good');
       else
-        show(`<div><span class="big">No match</span><span class="sub">`
-           + `closest ${esc(res.best_candidate.name)} at ${res.best_candidate.score}, `
-           + `below threshold ${res.threshold} · ${sub}</span>`
+        show(`<div><span class="big">Fingerprint not found</span>`
+           + `<span class="sub">No print in the system matched this scan</span>`
            + `${traceHtml()}</div>`, 'err');
       return;
     }
 
-    // enroll
-    say(`Sending ${mb(total)} MB. Creating identity…`);
-    let uuid, r = await fetch('/v1/identities', {
+    // capture: add to the system
+    say(`Sending ${mb(total)} MB. Adding to the system…`);
+    let uuid, r = await sessionFetch('/v1/identities', {
       method:'POST', headers:{...H,'Content-Type':'application/json'},
       body: JSON.stringify({name, consent:true})});
     if(r.status === 409){
-      const list = await fetch('/v1/identities', {headers:H});
-      if(!list.ok) throw new Error('auth failed (check the API key)');
+      const list = await sessionFetch('/v1/identities', {headers:H});
+      if(!list.ok) throw new Error('capture session expired — reload the page');
       uuid = (await list.json()).find(i => i.name === name).uuid;
       say('Adding to existing identity…');
     }else if(r.status === 401){
-      throw new Error('auth failed — check the API key');
+      throw new Error('capture session expired — reload the page');
     }else if(!r.ok){
       throw new Error(((await r.json()).detail) || ('HTTP '+r.status));
     }else{ uuid = (await r.json()).uuid; }
@@ -718,7 +963,7 @@ async function capture(source, kind){
       if(p.source && shotByName[p.source]) lastShot = {c: shotByName[p.source]};
       show(failureCard(p.reason_code, p.detail, res.selection), 'err'); return;
     }
-    const info = await (await fetch(`/v1/identities/${uuid}`, {headers:H})).json();
+    const info = await (await sessionFetch(`/v1/identities/${uuid}`, {headers:H})).json();
     const sel = res.selection || {};
     const kept = good.map(g => (g.candidate_score == null ? '–' : g.candidate_score.toFixed(2))).join(' / ');
     // Which camera settings actually produced the enrolled photo — the whole
@@ -728,26 +973,27 @@ async function capture(source, kind){
       ? `best ${good.length} of ${sel.candidates} frames · ridge ${kept} · ` : '')
       + (won ? won + ' · ' : '');
     const skipped = bad.length ? ` ${bad.length} frame${bad.length===1?'':'s'} refused.` : '';
-    show(`<div><span class="big">✓ ${esc(name)} — ${info.photos} photo`
-       + `${info.photos===1?'':'s'}</span><span class="sub">`
-       + `${from}${good[0].templates} templates, ${good[0].minutiae} minutiae, ridge quality `
+    const proof = res.self_check && res.self_check.passed
+      ? `Two scans matched at ${res.self_check.score} · ${res.processing_s}s processing · ` : '';
+    show(`<div><span class="big">Fingerprint successfully added</span><span class="sub">`
+       + `Identity ${esc(name)} · ${proof}${from}${good.length} verified templates · ${good[0].minutiae} minutiae · ridge quality `
        + `${good[0].quality == null ? '–' : good[0].quality.toFixed(2)} · `
-       + `${info.templates} total.${skipped} ${info.photos < 3
-            ? 'Capture ' + (3-info.photos) + ' more for a solid identity.'
-            : 'Ready — switch to Identify.'}</span>${traceHtml()}</div>`, 'good');
+       + `${info.templates} total.${skipped} Switch to Verify to check it.</span>${traceHtml()}</div>`, 'good');
+    enrollSamples = [];
   }catch(e){
+    unfreezeStage();
     show(e.code ? failureCard(e.code, e.message)
        : `<div><span class="big">✗ Error</span><span class="sub">${esc(e.message)}</span></div>`,
        'err');
   }finally{
+    unfreezeStage();
+    if(!isVerify() && busy && enrollSamples.length) enrollSamples = [];
     busy = false; $('upload').disabled = false; $('uploadvid').disabled = false;
     // Restore the button here rather than leaving it to tick(): tick only
     // repaints when it can measure a frame, so any failure with a stalled or
     // dark preview used to leave the page reading "Working…" for ever.
     $('shoot').disabled = false;
-    $('shoot').textContent = adaptive
-      ? (mode === 'enroll' ? 'Auto capture & enrol' : 'Auto identify')
-      : (mode === 'enroll' ? 'Capture & enrol' : 'Identify');
+    $('shoot').textContent = shootLabel();
     setTimeout(()=>{ sticky=''; }, 8000);
   }
 }
@@ -758,7 +1004,9 @@ function problemError(r){
   return e;
 }
 
-// --- Adaptive capture (Android Chrome) ------------------------------------
+// --- Legacy camera-search diagnostics ------------------------------------
+// Kept for debug comparisons only. The product workflow never calls these
+// focus/torch helpers; autoCapture() below takes the already-qualified crop.
 // Everything below drives the camera instead of asking the user to. It is
 // capability-gated and simply does not exist on iOS: no WebKit browser exposes
 // focus or torch control to a web page, and every iOS browser is WebKit, so
@@ -1004,9 +1252,11 @@ async function setFocus(d){
 async function setTorchTo(on){
   const t = trk();
   if(!t || !hasTorch || on === torchOn) return torchOn;
+  const before = torchOn;
   try{ await applyTimed(t, {advanced:[{torch:on}]}, 'torch'); torchOn = on; }
   catch(e){ lastCamError = 'torch: ' + ((e && e.message) || e); }
-  $('torch').classList.toggle('on', torchOn);
+  if(torchOn !== before) resetRidgeReadings();
+  updateFlashControl();
   window.__torch = torchOn ? 'on' : 'off';
   await settle(SETTLE_LIGHT);            // AE needs time to converge on the new light
   return torchOn;
@@ -1055,19 +1305,18 @@ async function restoreCamera(entry){
 }
 
 // The server's verdict on one tile. Never throws and never blocks the sweep:
-// without an API key or a network the sequence still runs on the local signal.
+// without a capture session or a network the sequence still runs locally.
 // Note the tile is the outline CROP while the uploaded candidates are whole
 // frames; the crop strategies run server-side either way, so this is a ranking
 // signal and the upload is the measurement.
 async function scoreTile(c){
-  const key = $('key').value.trim();
   if(!key || !c) return null;
   try{
     const blob = await new Promise(r => c.toBlob(b => r(b), 'image/jpeg', 0.9));
     if(!blob) return null;
     const fd = new FormData();
     fd.append('file', blob, 'tile.jpg');
-    const r = await fetch('/v1/quality', {method:'POST', headers:{'X-API-Key':key}, body:fd});
+    const r = await sessionFetch('/v1/quality', {method:'POST', body:fd});
     if(!r.ok) return null;
     const j = await r.json();
     if(typeof j.min_ridge_quality === 'number') ridgeGate = j.min_ridge_quality;
@@ -1103,8 +1352,48 @@ async function part(base){
   return (await takeStill('still_' + base + '.jpg')) || (await grabPart('frame_' + base + '.jpg'));
 }
 
+// A real clip from the live stream. Canvas-copying the preview is not a capture:
+// it has no shutter, no 4K still, and on iPhone it is the low-res viewfinder.
+async function recordClip(ms, log){
+  say('Recording — hold the thumb in the outline');
+  $('shoot').textContent = 'Recording…';
+  if(typeof MediaRecorder === 'undefined' || !video.srcObject){
+    if(log) log('record  MediaRecorder missing — last-resort burst');
+    return burst();
+  }
+  const types = ['video/mp4', 'video/webm;codecs=vp8', 'video/webm'];
+  const mime = types.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+  let rec;
+  try{ rec = new MediaRecorder(video.srcObject, mime ? {mimeType: mime} : undefined); }
+  catch(e){
+    if(log) log('record  MediaRecorder refused — last-resort burst');
+    return burst();
+  }
+  const chunks = [];
+  rec.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
+  rec.start(250);
+  const t0 = Date.now();
+  while(Date.now() - t0 < ms){
+    $('shoot').textContent = 'Recording ' + Math.max(1, Math.ceil((ms - (Date.now()-t0))/1000)) + 's';
+    await sleep(200);
+  }
+  await new Promise((res, rej) => {
+    rec.onstop = res;
+    rec.onerror = () => rej(new Error('recording failed'));
+    rec.stop();
+  });
+  const blob = new Blob(chunks, {type: rec.mimeType || mime || 'video/mp4'});
+  if(!blob.size){
+    if(log) log('record  empty clip — last-resort burst');
+    return burst();
+  }
+  const name = /mp4/.test(blob.type || mime) ? 'clip.mp4' : 'clip.webm';
+  if(log) log(`record  ${name} ${mb(blob.size)} MB`);
+  return [{blob, name}];
+}
+
 // --- The sequence ---------------------------------------------------------
-async function autoSequence(B, entry, log){
+async function legacyAdaptiveSequence(B, entry, log){
   const t0 = performance.now();
   const deadline = Date.now() + MAX_RUN_MS;
   const step = canFocus ? (camCaps.focusDistance.step || 0.01) : 0.01;
@@ -1177,7 +1466,7 @@ async function autoSequence(B, entry, log){
       const bs = b.server == null ? -1 : b.server, as = a.server == null ? -1 : a.server;
       return bs > as || (bs === as && b.local > a.local) ? b : a;
     });
-    log(`peak    ${fmt(best.d)}m by ${anyServer ? 'server ridge score' : 'local signal (no API key)'}`);
+    log(`peak    ${fmt(best.d)}m by ${anyServer ? 'server ridge score' : 'local signal (offline)'}`);
 
     // 2. Fine pass on the metre grid around the peak, local signal only. No
     //    uploads: at 10 cm one 0.01 m step is already ~1 D, so this is as fine
@@ -1308,46 +1597,20 @@ async function autoSequence(B, entry, log){
         : 'thumb already fills the outline') + ')');
   }
 
-  // 5. Shoot the pool the server chooses from. Diversity beats a single "best":
-  //    the focus neighbours cover a peak found through a shrunken tile, the
-  //    preview frames cover a takePhoto that softens or fails, and the other
-  //    light covers the flash/no-flash trade-off.
-  const parts = [];
+  // 5. One real capture. Numbered preview grabs are not photos.
   const tagOf = (o, d) => `t${o.torch ? 1 : 0}_d${d == null ? 'na' : Math.round(d*1000)}`;
-  const dists = [];
-  if(useFocus && best){
-    for(const k of [0, -1, 1]){
-      const d = quantFocus(best.d + k*step);
-      if(!dists.some(x => Math.abs(x - d) < step/2)) dists.push(d);
-    }
-  }else{
-    dists.push(null);
-  }
-  const total = dists.length + 2 + (loser ? 1 : 0);
-  const shotSay = () => {
-    $('shoot').textContent = `Shot ${parts.length+1}/${total}`;
-    say(`Taking the photos — ${parts.length+1} of ${total}`);
-  };
   await applyLight(winner);
-  for(const d of dists){
-    if(d != null) await setFocus(d);
-    shotSay();
-    const p = await part(tagOf(winner, d));
-    if(p) parts.push(p);
-  }
   if(useFocus && best) await setFocus(best.d);
-  for(const suffix of ['a', 'b']){
-    if(suffix === 'b') await sleep(150);
-    shotSay();
-    const p = await grabPart(`frame_${tagOf(winner, best && best.d)}_${suffix}.jpg`);
-    if(p) parts.push(p);
-  }
-  if(loser){
-    await applyLight(loser);
-    if(useFocus && best) await setFocus(best.d);
-    shotSay();
-    const p = await part(tagOf(loser, best && best.d));
-    if(p) parts.push(p);
+  $('shoot').textContent = 'Capturing';
+  say('Taking the photo…');
+  const tag = tagOf(winner, best && best.d);
+  const still = await takeStill('still_' + tag + '.jpg');
+  let parts;
+  if(still){
+    parts = [still];
+  }else{
+    log('parts   no still API — recording a clip');
+    parts = await recordClip(3200, log);
   }
   if(!parts.length) throw new Error('Could not capture a single frame.');
   if(lastCamError) log(`camera  last complaint — ${lastCamError}`);
@@ -1356,29 +1619,52 @@ async function autoSequence(B, entry, log){
   return parts;
 }
 
-async function autoCapture(){
-  const entry = {torch: torchOn, zoom: zoomNow};
-  const B = box;                     // frozen: the sizer must not move it mid-run
+async function autoCapture(label){
   trace = [];
   const log = s => { trace.push(s); if(DEBUG) console.log('[auto] ' + s); };
+  // Prefer the frame locked at the all-green instant. It usually already has a
+  // JPEG from the live ridge check, so this returns without another encode.
+  const locked = snapFrame;
+  snapFrame = null;
+  if(locked){
+    const blob = locked.blob || (locked.blobP ? await locked.blobP : null);
+    if(!blob) throw new Error('Could not encode the fingerprint crop.');
+    const out = locked.canvas;
+    const name = (label || 'fingerprint-crop') + '.jpg';
+    lastShot = {c: out};
+    shotByName = {[name]: out};
+    log(`source  ${video.videoWidth}x${video.videoHeight}`);
+    log(`crop    ${out.width}x${out.height} inside guide`);
+    log(`snap    locked all-green frame (no re-capture)`);
+    if(locked.score != null) log(`quality ${locked.score.toFixed(3)} ridge-validated`);
+    log(`upload  ${mb(blob.size)} MB`);
+    return [{blob, name, width:out.width, height:out.height}];
+  }
   const a = analyse();
   if(!a) throw new Error('The camera is not ready yet.');
-  if(a.fill < MIN_FILL)
-    throw new Error('Move closer first — the thumb has to fill the outline.');
-  log(`start   ${video.videoWidth}x${video.videoHeight} · fill ${fmt(a.fill*100,0)}%`
-    + ` · luma ${fmt(a.luma,0)} · zoom ${fmt(zoomNow,1)}x · stills `
-    + (stillSize ? `${stillSize.w}x${stillSize.h}` : imageCapture ? 'preview size' : 'unavailable'));
-  // The exact capability values, because every focus failure is device-specific
-  // and this line is the only way to see what the phone actually reported.
-  log(`caps    focusDistance ${JSON.stringify(camCaps.focusDistance || null)}`
-    + ` · focusMode ${JSON.stringify(camCaps.focusMode || null)}`);
-  log(`caps    zoom ${JSON.stringify(camCaps.zoom || null)}`
-    + ` · ev ${JSON.stringify(camCaps.exposureCompensation || null)}`);
-  try{
-    return await autoSequence(B, entry, log);
-  }finally{
-    try{ await restoreCamera(entry); }catch(e){}
+  const cached = bestRidge && Date.now() - bestRidge.at < RIDGE_WINDOW_MS
+    ? bestRidge : null;
+  const c = cached ? cached.canvas : cropCanvas(box);
+  if(!c) throw new Error('Could not crop the fingerprint guide.');
+  const maxWidth = 1200;
+  let out = c;
+  if(c.width > maxWidth){
+    out = document.createElement('canvas');
+    out.width = maxWidth;
+    out.height = Math.round(c.height * maxWidth / c.width);
+    out.getContext('2d').drawImage(c, 0, 0, out.width, out.height);
   }
+  const blob = cached && cached.blob && out === cached.canvas ? cached.blob
+    : await new Promise(r => out.toBlob(b => r(b), 'image/jpeg', 0.88));
+  if(!blob) throw new Error('Could not encode the fingerprint crop.');
+  const name = (label || 'fingerprint-crop') + '.jpg';
+  lastShot = {c: out};
+  shotByName = {[name]: out};
+  log(`source  ${video.videoWidth}x${video.videoHeight}`);
+  log(`crop    ${out.width}x${out.height} inside guide`);
+  if(cached && cached.score != null) log(`quality ${cached.score.toFixed(3)} best live ridge frame`);
+  log(`upload  ${mb(blob.size)} MB`);
+  return [{blob, name, width:out.width, height:out.height}];
 }
 
 function traceHtml(){
@@ -1398,26 +1684,36 @@ function wonLabel(n){
 }
 
 // --- Live ridge indicator -------------------------------------------------
-// Sends the outline region, at NATIVE stream resolution, to /v1/quality about
-// once a second and shows the score. This is the same measurement the server
-// gates on, so it answers the question the focus number cannot: "are there
-// ridges in there, or just a sharp-looking blur?".
-//
-// ADVISORY ONLY — it never disables the shutter. The page's rule is that a
-// blocking check must be reachable by holding still (see tick()), and on an
-// iPhone this one is not: with focus locked on the background there is no
-// hand movement that produces ridges. Sharp + no ridges is exactly when the
-// answer is "use the video button", so that is what it says.
-//
-// Cost: one ~150-250 KB POST per cycle at full resolution, which is ~10 MB a
-// minute of mobile data if it runs continuously. So it only polls while the
-// frame is worth scoring at all — thumb filling the outline, exposure sane —
-// which is also the only time the answer means anything. It must NOT be
-// downscaled to save bytes: ridges are 8-20 px apart and shrinking the tile
-// destroys the very thing being measured (see fingerphoto/frames.py).
-const RIDGE_MIN_MS = 900;
+// Sends only the guide crop to /v1/quality after position, focus, stillness,
+// and light have passed. The best scored frame is retained in memory until
+// capture; no full image or live-check crop is persisted by the server.
+const RIDGE_MIN_MS = 400;
 let ridgeGate = 0.40, ridgeScore = null, ridgeStop = false, ridgeKey = '';
 let ridgeWorthIt = false;   // set by tick(): framing and light are good enough
+let ridgePasses = 0, ridgeSamples = [], bestRidge = null, ridgeAdvice = '';
+let ridgeWaitingSince = 0, ridgeLastLocalGoodAt = 0, ridgeFailures = 0;
+
+function resetRidgeReadings(){
+  ridgeScore = null;
+  ridgePasses = 0;
+  ridgeSamples = [];
+  bestRidge = null;
+  if(!busy && !autoStarting) snapFrame = null;
+  ridgeAdvice = '';
+  ridgeWaitingSince = 0;
+  ridgeLastLocalGoodAt = 0;
+  ridgeFailures = 0;
+}
+
+function qualityAdvice(result){
+  const rep = result && result.detail && result.detail.full;
+  const q = rep && rep.quality;
+  if(!q) return 'Move closer until individual ridges are visible';
+  if(q.edge_density < .02) return 'Turn on Flash or move closer';
+  if(q.spectral_frac < .05) return 'Move closer and let the camera focus';
+  if(q.coherence_frac < .10) return 'Hold the finger still for a clearer read';
+  return `Keep steady — ridge score ${result.score.toFixed(2)} / ${ridgeGate.toFixed(2)}`;
+}
 
 function cropCanvas(b){
   const bx = b || box;
@@ -1435,25 +1731,52 @@ function cropCanvas(b){
 async function ridgeLoop(){
   for(;;){
     await new Promise(r => setTimeout(r, RIDGE_MIN_MS));
-    const key = $('key').value.trim();
     if(key !== ridgeKey){ ridgeKey = key; ridgeStop = false; }   // new key, try again
-    if(busy || ridgeStop || !key || !video.videoWidth || !ridgeWorthIt){
-      if(!ridgeWorthIt) ridgeScore = null;   // stale score would mislead
-      continue;
-    }
-    const c = cropCanvas();
+    if(busy || ridgeStop || !key || !video.videoWidth || !ridgeWorthIt) continue;
+    let c = cropCanvas();
     if(!c) continue;
+    if(c.width > 1200){
+      const scaled = document.createElement('canvas');
+      scaled.width = 1200;
+      scaled.height = Math.round(c.height * 1200 / c.width);
+      scaled.getContext('2d').drawImage(c, 0, 0, scaled.width, scaled.height);
+      c = scaled;
+    }
     try{
-      const blob = await new Promise(res => c.toBlob(b=>res(b), 'image/jpeg', 0.9));
+      const blob = await new Promise(res => c.toBlob(b=>res(b), 'image/jpeg', 0.88));
       const fd = new FormData();
       fd.append('file', blob, 'frame.jpg');
-      const r = await fetch('/v1/quality', {method:'POST', headers:{'X-API-Key':key}, body:fd});
-      if(r.status === 401){ ridgeStop = true; ridgeScore = null; continue; }
-      if(!r.ok){ ridgeScore = null; continue; }
+      fd.append('guided', 'true');
+      const r = await sessionFetch('/v1/quality', {method:'POST', body:fd});
+      if(r.status === 401){
+        ridgeStop = true; ridgeScore = null;
+        ridgeAdvice = 'Capture session expired — reload the page';
+        continue;
+      }
+      if(!r.ok){
+        ridgeFailures++;
+        ridgeAdvice = 'Ridge check unavailable — retrying';
+        continue;
+      }
       const j = await r.json();
       ridgeScore = j.score;
       if(typeof j.min_ridge_quality === 'number') ridgeGate = j.min_ridge_quality;
-    }catch(e){ ridgeScore = null; }
+      const at = Date.now(), passed = j.pass === true || ridgeScore >= ridgeGate;
+      ridgeSamples = ridgeSamples.filter(s => at - s.at < RIDGE_WINDOW_MS);
+      ridgeSamples.push({at, passed, score:ridgeScore});
+      ridgePasses = ridgeSamples.filter(s => s.passed).length;
+      ridgeAdvice = qualityAdvice(j);
+      ridgeFailures = 0;
+      const frame = {at, score:ridgeScore, canvas:c, blob};
+      if(!bestRidge || ridgeScore >= bestRidge.score) bestRidge = frame;
+      // Fire from the quality response itself: the JPEG in hand is already the
+      // frame that just made Ridges go Ready while the other meters were green.
+      if(passed && ridgePasses >= RIDGE_PASSES_REQUIRED && ridgeWorthIt)
+        commitCapture(frame);
+    }catch(e){
+      ridgeFailures++;
+      ridgeAdvice = 'Network interrupted — retrying ridge check';
+    }
   }
 }
 
@@ -1465,7 +1788,7 @@ function resize(mult){
   silhouettePath();
 }
 
-$('shoot').addEventListener('click', ()=>capture(null, adaptive ? 'auto' : 'burst'));
+$('shoot').addEventListener('click', ()=>setArmed(!autoArmed));
 $('upload').addEventListener('click', ()=>$('pick').click());
 $('pick').addEventListener('change', e => {
   const f = e.target.files[0];
@@ -1492,17 +1815,15 @@ $('zoom').addEventListener('click', async ()=>{
 });
 $('bigger').addEventListener('click', ()=>resize(1.18));
 $('smaller').addEventListener('click', ()=>resize(1/1.18));
-$('name').addEventListener('input', ()=>{ sticky=''; });
 document.querySelectorAll('.mode[data-mode]').forEach(b =>
   b.addEventListener('click', () => setMode(b.dataset.mode)));
 $('lens').addEventListener('click', nextCam);
-$('key').value = localStorage.getItem('fp_key') || '';   // survive reloads
-setMode('enroll');
+setMode('capture');
 video.addEventListener('loadedmetadata', layout);
 addEventListener('resize', layout);
 addEventListener('orientationchange', ()=>setTimeout(layout, 300));
 start().then(listCams);
-ridgeKey = $('key').value.trim();
+ridgeKey = key;
 ridgeLoop();
 </script>
 </body>

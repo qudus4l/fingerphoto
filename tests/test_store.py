@@ -20,7 +20,8 @@ def test_duplicate_name_rejected(tmp_store, fake_pipeline):
     assert e.value.code is ReasonCode.IDENTITY_EXISTS
 
 
-def test_enroll_and_stamps(tmp_store, fake_pipeline, bgr_image):
+def test_enroll_and_stamps(tmp_store, fake_pipeline, bgr_image, monkeypatch):
+    monkeypatch.setenv("FP_STORE_ORIGINALS", "true")
     ident = store.create_identity("Q", consent=True)
     out = store.enroll_photos(
         ident["uuid"], [("photo.jpg", bgr_image, b"original-bytes")], finger="right_thumb"
@@ -40,6 +41,10 @@ def test_enroll_and_stamps(tmp_store, fake_pipeline, bgr_image):
     # cannot overwrite each other; the sanitized stem is still the prefix
     (stored,) = list((store.photo_store() / ident["uuid"]).glob("photo_*.jpg"))
     assert stored.read_bytes() == b"original-bytes"
+    photos = store.list_photos(ident["uuid"])
+    assert len(photos) == 1 and photos[0]["available"] and photos[0]["filename"] == stored.name
+    data, media = store.original_photo_bytes(ident["uuid"], stored.name)
+    assert data == b"original-bytes" and media == "image/jpeg"
 
 
 def test_invalid_finger_position(tmp_store, fake_pipeline, bgr_image):
@@ -52,6 +57,7 @@ def test_invalid_finger_position(tmp_store, fake_pipeline, bgr_image):
 def test_encryption_round_trip(tmp_store, fake_pipeline, bgr_image, monkeypatch):
     key = Fernet.generate_key().decode()
     monkeypatch.setenv("FP_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("FP_STORE_ORIGINALS", "true")
     ident = store.create_identity("Q", consent=True)
     store.enroll_photos(ident["uuid"], [("photo.jpg", bgr_image, b"original-bytes")])
     con = store.connect()
@@ -68,6 +74,77 @@ def test_store_originals_opt_out(tmp_store, fake_pipeline, bgr_image, monkeypatc
     ident = store.create_identity("Q", consent=True)
     store.enroll_photos(ident["uuid"], [("photo.jpg", bgr_image, b"original-bytes")])
     assert not (store.photo_store() / ident["uuid"]).exists()
+
+
+def test_guided_enrollment_requires_two_matching_scans(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import identity
+
+    extraction_options = []
+
+    def observed_extract(bgr, **kwargs):
+        extraction_options.append(kwargs)
+        return fake_pipeline(bgr, **kwargs)
+
+    monkeypatch.setattr(identity, "photo_template_set", observed_extract)
+    ident = store.create_identity("Guided", consent=True)
+    second = bgr_image.copy()
+    second[0, 0] = 129
+    out = store.enroll_photos(
+        ident["uuid"],
+        [("scan-1.jpg", bgr_image, b"one"), ("scan-2.jpg", second, b"two")],
+        finger="right_thumb",
+        guided=True,
+    )
+    assert out["profile"] == "guided"
+    assert out["self_check"]["passed"] is True
+    assert out["self_check"]["score"] == 55.0
+    assert [r["status"] for r in out["results"]] == ["enrolled", "enrolled"]
+    assert len(extraction_options) == 2
+    assert all(o["crop"] is False and o["sweep"] == (1.0,) for o in extraction_options)
+    assert not (store.photo_store() / ident["uuid"]).exists()
+
+
+def test_guided_enrollment_rejects_cross_scan_mismatch(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import identity
+
+    monkeypatch.setattr(identity, "set_score", lambda probe, enrolled: 12.0)
+    ident = store.create_identity("Mismatch", consent=True)
+    second = bgr_image.copy()
+    second[0, 0] = 129
+    out = store.enroll_photos(
+        ident["uuid"],
+        [("scan-1.jpg", bgr_image, b"one"), ("scan-2.jpg", second, b"two")],
+        guided=True,
+    )
+    assert out["self_check"]["passed"] is False
+    assert all(r["reason_code"] == "ENROLLMENT_MISMATCH" for r in out["results"])
+    con = store.connect()
+    assert con.execute("SELECT count(*) FROM templates").fetchone()[0] == 0
+    con.close()
+
+
+def test_guided_enrollment_rejects_one_scan(tmp_store, fake_pipeline, bgr_image):
+    ident = store.create_identity("One", consent=True)
+    out = store.enroll_photos(
+        ident["uuid"], [("scan-1.jpg", bgr_image, b"one")], guided=True
+    )
+    assert out["self_check"] == {"passed": False, "reason": "two_scans_required"}
+    assert out["results"][0]["reason_code"] == "ENROLLMENT_MISMATCH"
+
+
+def test_guided_enrollment_rejects_duplicate_scan(tmp_store, fake_pipeline, bgr_image):
+    ident = store.create_identity("Duplicate", consent=True)
+    out = store.enroll_photos(
+        ident["uuid"],
+        [("scan-1.jpg", bgr_image, b"one"), ("scan-2.jpg", bgr_image.copy(), b"two")],
+        guided=True,
+    )
+    assert out["self_check"] == {"passed": False, "reason": "duplicate_scan"}
+    assert out["results"][0]["reason_code"] == "ENROLLMENT_MISMATCH"
 
 
 def test_identify_and_verify(tmp_store, fake_pipeline, bgr_image):
@@ -89,7 +166,8 @@ def test_identify_empty_gallery(tmp_store, fake_pipeline, bgr_image):
     assert e.value.code is ReasonCode.GALLERY_EMPTY
 
 
-def test_hard_delete(tmp_store, fake_pipeline, bgr_image):
+def test_hard_delete(tmp_store, fake_pipeline, bgr_image, monkeypatch):
+    monkeypatch.setenv("FP_STORE_ORIGINALS", "true")
     ident = store.create_identity("Q", consent=True)
     store.enroll_photos(ident["uuid"], [("p.jpg", bgr_image, b"x")])
     assert (store.photo_store() / ident["uuid"]).exists()
@@ -106,7 +184,10 @@ def test_hard_delete(tmp_store, fake_pipeline, bgr_image):
     assert e.value.code is ReasonCode.IDENTITY_NOT_FOUND
 
 
-def test_path_traversal_filename_sanitized(tmp_store, fake_pipeline, bgr_image):
+def test_path_traversal_filename_sanitized(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    monkeypatch.setenv("FP_STORE_ORIGINALS", "true")
     ident = store.create_identity("Q", consent=True)
     out = store.enroll_photos(ident["uuid"], [("../../evil.jpg", bgr_image, b"x")])
     assert out["results"][0]["filename"] == "evil.jpg"
@@ -125,6 +206,7 @@ def test_enroll_video_selects_frames(
     tmp_store, fake_pipeline, fake_frame_score, monkeypatch
 ):
     monkeypatch.setenv("FP_VIDEO_FRAMES_ENROLL", "2")
+    monkeypatch.setenv("FP_STORE_ORIGINALS", "true")
     ident = store.create_identity("V", consent=True)
     out = store.enroll_photos(
         ident["uuid"], [("clip.mp4", None, _clip(tmp_store))], finger="right_thumb"

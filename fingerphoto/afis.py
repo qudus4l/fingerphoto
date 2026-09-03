@@ -1,8 +1,10 @@
 """SourceAFIS bridge via JPype.
 
 Templates are opaque CBOR blobs (version-locked: keep original images so they
-can be re-extracted after a SourceAFIS upgrade). Score threshold 40 roughly
-corresponds to 0.01% false-match rate per SourceAFIS docs; tune on real data.
+can be re-extracted after a SourceAFIS upgrade). Score threshold 50 is a
+moderate operational bar for this project's photo enroll/verify path
+(SourceAFIS's published ~40 ≈ 0.01% FMR is on contact scanners; raise
+further only after measuring genuine/impostor on your data).
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 JARS_DIR = Path(__file__).resolve().parent.parent / "jars"
-THRESHOLD = 40.0
+THRESHOLD = 50.0
 
 # The JVM starts once per process and can never be restarted (JPype/JNI
 # limitation) — so it must start lazily AFTER any fork, and exactly once

@@ -15,8 +15,6 @@ import threading
 
 import pytest
 
-import pytest
-
 from fingerphoto import afis, identity, imaging
 from fingerphoto.errors import AcquisitionError, ReasonCode
 

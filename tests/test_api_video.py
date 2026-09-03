@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from fingerphoto import frames
+
 from .conftest import make_clip
 
 KEY = {"X-API-Key": "video-test-key"}
@@ -98,6 +100,66 @@ def test_enroll_burst_with_best_of(client):
     assert res["selection"]["candidates"] == 5
 
 
+def test_guided_enrollment_uses_two_scans_and_self_checks(client):
+    uuid = _identity(client, "Guided")
+    files = [
+        ("files", ("fingerprint-crop-1.jpg", _jpeg(180), "image/jpeg")),
+        ("files", ("fingerprint-crop-2.jpg", _jpeg(185), "image/jpeg")),
+    ]
+    r = client.post(
+        f"/v1/identities/{uuid}/photos",
+        headers=KEY,
+        files=files,
+        data={"guided": "true", "finger": "right_thumb"},
+    )
+    job = _poll(client, r.json()["job_id"])
+    assert job["status"] == "succeeded", job
+    assert job["result"]["profile"] == "guided"
+    assert job["result"]["self_check"]["passed"] is True
+    assert len(job["result"]["results"]) == 2
+
+
+def test_browser_session_completes_enroll_and_identify_without_api_key_header(client):
+    """Exact browser auth path: page cookie -> create -> enroll -> poll -> identify."""
+    page = client.get("/capture")
+    assert page.status_code == 200 and client.cookies.get("fp-capture-session")
+
+    created = client.post("/v1/identities", json={"name": "Browser E2E", "consent": True})
+    assert created.status_code == 201, created.text
+    uuid = created.json()["uuid"]
+    enrolled = client.post(
+        f"/v1/identities/{uuid}/photos",
+        files=[
+            ("files", ("enrollment-scan-1.jpg", _jpeg(180), "image/jpeg")),
+            ("files", ("enrollment-scan-2.jpg", _jpeg(185), "image/jpeg")),
+        ],
+        data={"guided": "true", "finger": "right_thumb"},
+    )
+    assert enrolled.status_code == 202, enrolled.text
+    job = _poll_without_header(client, enrolled.json()["job_id"])
+    assert job["status"] == "succeeded" and job["result"]["self_check"]["passed"]
+
+    identified = client.post(
+        "/v1/identify",
+        files=[("files", ("fingerprint-probe.jpg", _jpeg(190), "image/jpeg"))],
+        data={"guided": "true", "best_of": "1"},
+    )
+    assert identified.status_code == 202, identified.text
+    result = _poll_without_header(client, identified.json()["job_id"])
+    assert result["status"] == "succeeded"
+    assert result["result"]["match"]["name"] == "Browser E2E"
+
+
+def _poll_without_header(client, job_id, timeout=30):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        out = client.get(f"/v1/jobs/{job_id}").json()
+        if out["status"] in ("succeeded", "failed"):
+            return out
+        time.sleep(0.05)
+    raise TimeoutError(job_id)
+
+
 def test_identify_with_files_and_best_of(client):
     uuid = _identity(client, "Known")
     client_files = [("files", ("p.jpg", _jpeg(200), "image/jpeg"))]
@@ -153,6 +215,23 @@ def test_quality_endpoint(client):
     # reaches frames.frame_score through the module, as the fixture patches it
     assert body["score"] == pytest.approx(200 / 255, abs=1e-3)
     assert body["pass"] is True
+
+
+def test_quality_endpoint_uses_guided_scorer(client, monkeypatch):
+    monkeypatch.setattr(
+        frames,
+        "guided_frame_score",
+        lambda bgr: (0.65, "full", {"full": {"quality": {"valid": True}}}),
+    )
+    r = client.post(
+        "/v1/quality",
+        headers=KEY,
+        data={"guided": "true"},
+        files={"file": ("fingerprint-crop.jpg", _jpeg(200), "image/jpeg")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["score"] == pytest.approx(0.65)
+    assert r.json()["strategy"] == "full"
 
 
 def test_quality_endpoint_scores_a_real_frame(real_score_client):

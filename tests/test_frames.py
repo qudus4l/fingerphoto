@@ -1,6 +1,7 @@
 """Candidate extraction and best-frame selection (no JVM, no real scorer)."""
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -139,6 +140,25 @@ def test_frame_score_finds_no_finger_in_a_blank_frame():
     score, strategy, detail = frames.frame_score(np.zeros((480, 640, 3), np.uint8))
     assert score == 0.0 and strategy is None
     assert detail.get("reason") == "no_finger"
+
+
+def test_guided_frame_score_uses_the_supplied_crop_directly():
+    x = np.arange(256, dtype=np.float32)
+    ridges = np.uint8(np.clip(128 + 60 * np.sin(2 * np.pi * x / 8), 0, 255))
+    gray = np.tile(ridges, (256, 1))
+    bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    score, strategy, detail = frames.guided_frame_score(bgr)
+    assert score >= 0.9 and strategy == "full"
+    assert set(detail) == {"full"}
+    assert detail["full"]["quality"]["valid"] is True
+
+
+def test_guided_frame_score_rejects_a_flat_crop():
+    score, strategy, detail = frames.guided_frame_score(
+        np.full((256, 256, 3), 128, np.uint8)
+    )
+    assert score == 0.0 and strategy is None
+    assert detail["full"]["reason"] == "no_ridge_period"
 
 
 def test_frame_score_on_a_real_photo():

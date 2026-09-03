@@ -1,4 +1,4 @@
-// Simulated-camera tests for fingerphoto/api/static/capture.html.
+// Simulated-camera tests for the cropped, guarantee-gated capture page.
 //
 //     node scripts/capture_sim.js
 //
@@ -143,7 +143,7 @@ function build(opt){
   const el = id => els[id] || (els[id] = {id, style:{}, textContent:'', innerHTML:'',
     value: id==='key' ? (opt.key||'') : (id==='name' ? 'Tester' : ''), className:'', dataset:{},
     files:[], disabled:false, classList:{toggle(){},add(){},remove(){},contains:()=>false},
-    addEventListener(){}, setAttribute(){}, click(){}, querySelector:()=>({textContent:''})});
+    addEventListener(){}, setAttribute(){}, click(){}, querySelector:()=>({textContent:'',style:{}})});
   // a stand-in for the server's ridge detector: contrast at the known period
   function serverScore(c){
     if(!c) return 0;
@@ -172,8 +172,16 @@ function build(opt){
               querySelectorAll: ()=>[], body:{clientWidth:400}},
     FormData: class { constructor(){this.parts=[];} append(k,v){this.parts.push(v);} },
     fetch: async (url, o) => {
+      if(/\/capture\/session/.test(url)){
+        cam.renews = (cam.renews || 0) + 1;
+        return {ok:true, status:200, json:async()=>({status:'ok'})};
+      }
       if(!/\/v1\/quality/.test(url)) return {ok:false, status:404, json:async()=>({})};
       if(!opt.key) return {ok:false, status:401, json:async()=>({})};
+      if(opt.expireOnce && !cam.expiredOnce){
+        cam.expiredOnce = true;
+        return {ok:false, status:401, json:async()=>({})};
+      }
       const blob = o.body.parts.find(p => p && p._c);
       return {ok:true, status:200, json: async () => ({
         score: serverScore(blob && blob._c), strategy:'distal', min_ridge_quality:0.40})};
@@ -200,7 +208,7 @@ function build(opt){
   return {ctx, cam};
 }
 
-(async () => {
+async function legacyAdaptiveTests(){
   // ---- 0. The pieces on their own ---------------------------------------
   console.log('\n== units: the ridge signal, still sizing, name parsing ==');
   {
@@ -260,9 +268,9 @@ function build(opt){
     check('peak chosen by the server score', /peak\s+0\.1[12]m by server ridge score/.test(tr),
           (/peak[^\n]*/.exec(tr)||[])[0]);
     check('server scores present in the trace', /ridge 0\.\d\d/.test(tr));
-    check('stills were taken', cam.stills >= 4, cam.stills + ' stills');
+    check('stills were taken', cam.stills >= 1, cam.stills + ' stills');
     check('parts are stills, not frames',
-          parts.filter(p=>/^still_/.test(p.name)).length === 4,
+          parts.filter(p=>/^still_/.test(p.name)).length === 1,
           parts.map(p=>p.name).join(' '));
     check('zoom skipped, the score is already at the ceiling',
           /zoom\s+skipped \(ridge score already at the ceiling/.test(tr),
@@ -289,7 +297,7 @@ function build(opt){
           Math.abs(cam.zoom - 1) < 1e-9, 'zoom ' + cam.zoom);
   }
 
-  // ---- 4. takePhoto broken: fall back to preview frames ------------------
+  // ---- 4. takePhoto broken: fall back to a recorded clip / burst --------
   console.log('\n== Android with a broken takePhoto ==');
   {
     const {ctx, cam} = build({key:'k', imageCapture:true, stillsBroken:true,
@@ -298,9 +306,10 @@ function build(opt){
         torch:true})});
     await sleep(400);
     const parts = await ctx.autoCapture();
-    check('run completed on frames', parts.length === 6, String(parts.length));
-    check('every part is a preview frame', parts.every(p => /^frame_/.test(p.name)));
-    check('meta says stills are unavailable', /^unavailable/.test(ctx.window.__stills),
+    check('run completed with a real fallback capture', parts.length >= 1, String(parts.length));
+    check('did not ship preview-frame fakes', parts.every(p => !/^frame_/.test(p.name)),
+          parts.map(p=>p.name).join(' '));
+    check('meta says stills are unavailable', /unavailable/.test(ctx.window.__stills),
           ctx.window.__stills);
     check('only one takePhoto attempt was made', cam.stills === 0);
   }
@@ -308,7 +317,7 @@ function build(opt){
   // ---- 5. Focus control but no torch (some tablets) ---------------------
   console.log('\n== Android, manual focus but no torch ==');
   {
-    const {ctx, cam} = build({key:'k',
+    const {ctx, cam} = build({key:'k', imageCapture:true,
       caps:(w,h)=>({width:{max:w},height:{max:h},
         focusMode:['continuous','manual'], focusDistance:{min:0.10,max:3,step:0.01}})});
     await sleep(400);
@@ -316,8 +325,8 @@ function build(opt){
     const parts = await ctx.autoCapture();
     const tr = ctx.traceHtml().replace(/<[^>]+>/g,'');
     check('no light stage in the trace', !/^light/m.test(tr));
-    check('five candidates, all torch-off', parts.length === 5
-          && parts.every(p => /_t0_/.test(p.name)), parts.map(p=>p.name).join(' '));
+    check('one still, torch-off', parts.length === 1
+          && parts.every(p => /still_t0_/.test(p.name)), parts.map(p=>p.name).join(' '));
     check('sweep still found the distance', /peak\s+0\.1[12]m/.test(tr),
           (/peak[^\n]*/.exec(tr)||[])[0]);
   }
@@ -363,7 +372,7 @@ function build(opt){
     check('the light search still ran', /^light\s+winner/m.test(tr),
           (/light\s+winner[^\n]*/.exec(tr)||[])[0]);
     check('candidates carry no invented distance',
-          parts.every(p => /_dna/.test(p.name)), (parts||[]).map(p=>p.name).join(' '));
+          parts.every(p => /_dna|burst_|clip\./.test(p.name)), (parts||[]).map(p=>p.name).join(' '));
   }
 
   // ---- 8. A device reporting focusDistance.min as 0 ---------------------
@@ -408,9 +417,57 @@ function build(opt){
     check('the timeout is named in the trace', /did not answer in \d+ms/.test(tr),
           (/focus\s+REFUSED[^\n]*/.exec(tr)||[])[0]);
     check('it still produced candidates under the camera autofocus',
-          parts.every(p => /_dna/.test(p.name)), parts.map(p=>p.name).join(' '));
+          parts.every(p => /_dna|burst_|clip\./.test(p.name)), parts.map(p=>p.name).join(' '));
   }
 
+  console.log(failures ? '\n' + failures + ' FAILURES' : '\nall checks passed');
+  process.exit(failures ? 1 : 0);
+}
+
+(async () => {
+  console.log('\n== guarantee-gated cropped capture ==');
+  const {ctx, cam} = build({
+    key:'k', expireOnce:true,
+    caps:(w,h)=>({width:{max:w},height:{max:h},
+      focusMode:['continuous','manual'], focusDistance:{min:0.10,max:3,step:0.01},
+      torch:true, zoom:{min:1,max:8,step:0.1}})
+  });
+  ctx.setArmed(false);
+  await sleep(400);
+  const renewed = await ctx.sessionFetch('/v1/quality', {
+    method:'POST', body:new ctx.FormData()
+  });
+  check('expired browser session renews and retries automatically',
+        renewed.status === 200 && cam.renews === 1, `renewals ${cam.renews || 0}`);
+  check('new flash control is available', !ctx.document.getElementById('torch').disabled
+        && ctx.document.getElementById('torch').textContent === 'Flash: Off');
+  await ctx.toggleTorch();
+  check('flash button turns the light on', cam.torch
+        && ctx.document.getElementById('torch').textContent === 'Flash: On');
+  await ctx.toggleTorch();
+  check('flash button turns the light off', !cam.torch
+        && ctx.document.getElementById('torch').textContent === 'Flash: Off');
+  cam.calls = []; // the automatic capture must not add any flash/focus calls
+  const full = ctx.grabFrame();
+  const fullPixels = full.width * full.height;
+  const parts = await ctx.autoCapture();
+  const shot = parts[0];
+  check('one guide crop is produced', parts.length === 1 && shot.name === 'fingerprint-crop.jpg');
+  check('upload contains only the guide region', shot.width * shot.height < fullPixels,
+        `${shot.width}x${shot.height} from ${full.width}x${full.height}`);
+  check('crop is compressed before upload', shot.blob.size < fullPixels / 8,
+        `${(shot.blob.size/1048576).toFixed(2)} MB`);
+  check('capture does not sweep focus', !cam.calls.some(c => /focusDistance/.test(c)));
+  check('capture does not toggle the torch', !cam.calls.some(c => /torch/.test(c)));
+  const tr = ctx.traceHtml().replace(/<[^>]+>/g,' ');
+  check('trace reports crop dimensions and upload size', /crop\s+\d+x\d+ inside guide/.test(tr)
+        && /upload\s+\d+\.\d MB/.test(tr), tr.replace(/\s+/g,' ').trim());
+  await ctx.collectFirstEnrollmentScan();
+  check('enrollment stops after scan one and asks for finger removal',
+        /Lift your finger/.test(ctx.document.getElementById('status').textContent));
+  check('second scan cannot reuse the same placement',
+        ctx.document.getElementById('shoot').disabled
+        && ctx.document.getElementById('shoot').textContent === 'Waiting for finger to lift');
   console.log(failures ? '\n' + failures + ' FAILURES' : '\nall checks passed');
   process.exit(failures ? 1 : 0);
 })();

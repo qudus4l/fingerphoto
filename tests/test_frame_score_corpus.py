@@ -38,7 +38,7 @@ FIXME = "re-run scripts/quality_calibration.py before changing quality.py or fra
 
 def _rows():
     if not MANIFEST.exists():
-        pytest.skip(f"{MANIFEST} not on disk (local corpus)")
+        pytest.skip(f"{MANIFEST} not on disk (local corpus)", allow_module_level=True)
     out = []
     for r in csv.DictReader(MANIFEST.open()):
         if r["path"].startswith("#"):
