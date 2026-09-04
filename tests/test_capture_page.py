@@ -49,7 +49,7 @@ def test_capture_uses_http_only_session_and_generated_name(capture_client):
     assert "$('torch').style.display = 'none'" not in body
     assert "color-scheme:light" in body
     assert "Secure capture" in body
-    assert "RIDGE_PASSES_REQUIRED = 1" in body
+    assert "RIDGE_PASSES_REQUIRED = 3" in body
     assert "RIDGE_WINDOW_MS = 5000" in body
     assert "RIDGE_MAX_WAIT_MS = 6500" in body
     assert "AUTO_HOLD_MS = 0" in body
@@ -72,6 +72,12 @@ def test_capture_uses_http_only_session_and_generated_name(capture_client):
     assert "renewCaptureSession" in body
     assert "sessionFetch" in body
     assert "uploadOnce" in body
+    assert "ridgeFallbackEligible" in body
+    assert "recordRidgeSample" in body
+    assert "bestRidge = null" in body
+    assert "restartAfterAcquisitionFailure" in body
+    assert "RETRYABLE_ACQUISITION" in body
+    assert "Lift the finger completely to restart scan 1 of 2" in body
     # TestClient keeps the HttpOnly cookie, so the page can call protected APIs.
     assert capture_client.get("/v1/version").status_code == 200
 

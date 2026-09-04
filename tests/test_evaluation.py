@@ -281,7 +281,7 @@ def test_build_and_write_report(tmp_path, fake_match):
     for f in ("report.json", "photos.csv", "pairs.csv", "loo.csv"):
         assert (d / f).exists(), f
     assert (tmp_path / "latest.json").exists()
-    assert json.loads((d / "report.json").read_text())["meta"]["threshold"] == 50
+    assert json.loads((d / "report.json").read_text())["meta"]["threshold"] == 40
     assert evaluation.format_report(report, per_template=True)
 
 

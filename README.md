@@ -26,6 +26,18 @@ directions, and commits both templates atomically only when the weaker score
 clears the configured threshold. Verification needs one guided scan. On the
 current development machine this measured about 7.3 s for two-scan enrollment
 and 3.2 s for identification, versus 22 s for the former single-photo path.
+The live camera waits for three ridge-valid readings in a five-second window
+and submits the highest-scoring JPEG, rather than the third or first acceptable
+frame. If a guided identification or verification misses at the fast `1.0`
+scale, it retries the same probe once at `0.87` and `1.15`; successful fast-path
+matches and guided enrollment never pay for that fallback. If those variants
+still miss, the server cylindrically unwraps the guide crop at three modest
+curvature hypotheses (`35°`, `55°`, and `65°`) to correct side compression and
+adds their `1.0` templates to the existing probe set. The original templates
+are never replaced, so the experimental warp cannot lower the best score.
+These extractions run only on the slow no-match path. Guided result JSON includes
+`scale_fallback` and `geometry_fallback` timing, template-count, and
+before/after score metadata.
 
 Scale normalization is the make-or-break step: a photo has unknown DPI, so we
 estimate the ridge period (grid-median FFT — a single global FFT gets captured

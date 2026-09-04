@@ -183,8 +183,9 @@ function build(opt){
         return {ok:false, status:401, json:async()=>({})};
       }
       const blob = o.body.parts.find(p => p && p._c);
+      const score = serverScore(blob && blob._c);
       return {ok:true, status:200, json: async () => ({
-        score: serverScore(blob && blob._c), strategy:'distal', min_ridge_quality:0.40})};
+        score, strategy:'distal', pass:score >= 0.40, min_ridge_quality:0.40})};
     },
     XMLHttpRequest: class { open(){} setRequestHeader(){} send(){} },
     innerHeight:800, addEventListener(){},
@@ -441,6 +442,28 @@ async function legacyAdaptiveTests(){
         renewed.status === 200 && cam.renews === 1, `renewals ${cam.renews || 0}`);
   check('new flash control is available', !ctx.document.getElementById('torch').disabled
         && ctx.document.getElementById('torch').textContent === 'Flash: Off');
+  const now = Date.now();
+  check('timeout fallback needs at least three scored frames',
+        !ctx.ridgeFallbackEligible(true, now-7000, now, 2, {score:.8})
+        && ctx.ridgeFallbackEligible(true, now-7000, now, 3, {score:.3}));
+  ctx.resetRidgeReadings();
+  const r1 = {at:now, score:.61, blob:{id:1}};
+  const r2 = {at:now+400, score:.92, blob:{id:2}};
+  const r3 = {at:now+800, score:.75, blob:{id:3}};
+  check('first and second ridge passes do not lock',
+        ctx.recordRidgeSample(r1, true) === null
+        && ctx.recordRidgeSample(r2, true) === null);
+  check('third ridge pass locks the best frame, not the third frame',
+        ctx.recordRidgeSample(r3, true) === r2);
+  ctx.resetRidgeReadings();
+  ctx.recordRidgeSample({at:now-6000, score:.99, blob:{id:'stale'}}, true);
+  ctx.recordRidgeSample(r1, true);
+  ctx.recordRidgeSample(r2, true);
+  check('stale ridge passes cannot complete a later capture',
+        ctx.recordRidgeSample({at:now+400, score:.75, blob:{id:4}}, false) === null);
+  check('quality failures retry but completed no-match does not',
+        ctx.isRetryableAcquisition('QUALITY_TOO_LOW')
+        && !ctx.isRetryableAcquisition('GALLERY_EMPTY'));
   await ctx.toggleTorch();
   check('flash button turns the light on', cam.torch
         && ctx.document.getElementById('torch').textContent === 'Flash: On');
@@ -468,6 +491,24 @@ async function legacyAdaptiveTests(){
   check('second scan cannot reuse the same placement',
         ctx.document.getElementById('shoot').disabled
         && ctx.document.getElementById('shoot').textContent === 'Waiting for finger to lift');
+
+  const verifyRetry = build({key:'k', caps:()=>({focusMode:['continuous']})}).ctx;
+  await sleep(400);
+  verifyRetry.setMode('verify');
+  verifyRetry.setArmed(false);
+  verifyRetry.restartAfterAcquisitionFailure('QUALITY_TOO_LOW', 'bad frame');
+  check('verification quality failure automatically re-arms capture',
+        verifyRetry.document.getElementById('shoot').textContent === 'Pause auto-capture'
+        && /scanning again/i.test(verifyRetry.document.getElementById('status').textContent));
+
+  const enrollRetry = build({key:'k', caps:()=>({focusMode:['continuous']})}).ctx;
+  await sleep(400);
+  enrollRetry.setMode('capture');
+  enrollRetry.restartAfterAcquisitionFailure('ENROLLMENT_MISMATCH', 'different scans');
+  check('enrollment failure waits for removal before restarting scan one',
+        enrollRetry.document.getElementById('shoot').disabled
+        && enrollRetry.document.getElementById('shoot').textContent === 'Waiting for finger to lift'
+        && /restart scan 1 of 2/i.test(enrollRetry.document.getElementById('status').textContent));
   console.log(failures ? '\n' + failures + ' FAILURES' : '\nall checks passed');
   process.exit(failures ? 1 : 0);
 })();

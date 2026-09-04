@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from cryptography.fernet import Fernet
 
 from fingerphoto import crypto, store, version
-from fingerphoto.errors import ReasonCode, StoreError
+from fingerphoto.errors import AcquisitionError, ReasonCode, StoreError
 
 
 def test_consent_required(tmp_store, fake_pipeline):
@@ -99,7 +100,7 @@ def test_guided_enrollment_requires_two_matching_scans(
     )
     assert out["profile"] == "guided"
     assert out["self_check"]["passed"] is True
-    assert out["self_check"]["score"] == 55.0
+    assert out["self_check"]["score"] == 100.0
     assert [r["status"] for r in out["results"]] == ["enrolled", "enrolled"]
     assert len(extraction_options) == 2
     assert all(o["crop"] is False and o["sweep"] == (1.0,) for o in extraction_options)
@@ -150,14 +151,300 @@ def test_guided_enrollment_rejects_duplicate_scan(tmp_store, fake_pipeline, bgr_
 def test_identify_and_verify(tmp_store, fake_pipeline, bgr_image):
     ident = store.create_identity("Q", consent=True)
     store.enroll_photos(ident["uuid"], [("p.jpg", bgr_image, b"x")])
-    result = store.identify_bgr(bgr_image)  # fake set_score = 55 >= 40
-    assert result["match"]["name"] == "Q" and result["match"]["score"] == 55.0
-    result = store.identify_bgr(bgr_image, match_threshold=60.0)
+    result = store.identify_bgr(bgr_image)  # fake set_score = 100 >= default threshold
+    assert result["match"]["name"] == "Q" and result["match"]["score"] == 100.0
+    result = store.identify_bgr(bgr_image, match_threshold=110.0)
     assert result["match"] is None and result["best_candidate"]["name"] == "Q"
     v = store.verify_bgr(ident["uuid"], bgr_image)
-    assert v["verified"] is True and v["score"] == 55.0
-    v = store.verify_bgr(ident["uuid"], bgr_image, match_threshold=60.0)
+    assert v["verified"] is True and v["score"] == 100.0
+    v = store.verify_bgr(ident["uuid"], bgr_image, match_threshold=110.0)
     assert v["verified"] is False
+
+
+def test_guided_identify_fast_path_does_not_extract_fallback_scales(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import identity
+
+    calls = []
+
+    def extract(bgr, **kwargs):
+        calls.append(kwargs["sweep"])
+        fake_pipeline(bgr, **kwargs)
+        return [b"base"]
+
+    monkeypatch.setattr(identity, "photo_template_set", extract)
+    ident = store.create_identity("Fast", consent=True)
+    store.enroll_photos(ident["uuid"], [("enroll.jpg", bgr_image, b"e")])
+    calls.clear()
+    monkeypatch.setattr(identity, "set_score", lambda probe, enrolled: 70.0)
+
+    out = store.identify_uploads(
+        [("probe.jpg", bgr_image, b"p")], guided=True
+    )
+
+    assert out["match"]["name"] == "Fast"
+    assert calls == [store.GUIDED_INITIAL_SWEEP]
+    assert out["scale_fallback"] == {
+        "attempted": False,
+        "variants": list(store.GUIDED_FALLBACK_SWEEP),
+        "added_templates": 0,
+        "score_before": 70.0,
+        "score_after": 70.0,
+        "processing_s": 0.0,
+    }
+    assert out["geometry_fallback"]["attempted"] is False
+
+
+def test_guided_identify_retries_two_scales_once_after_no_match(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import identity
+
+    calls = []
+
+    def extract(bgr, **kwargs):
+        sweep = kwargs["sweep"]
+        calls.append(sweep)
+        fake_pipeline(bgr, **kwargs)
+        return [b"fallback"] if sweep == store.GUIDED_FALLBACK_SWEEP else [b"base"]
+
+    def score(probe, enrolled):
+        return 75.0 if b"fallback" in probe else 20.0
+
+    monkeypatch.setattr(identity, "photo_template_set", extract)
+    ident = store.create_identity("Recovered", consent=True)
+    store.enroll_photos(ident["uuid"], [("enroll.jpg", bgr_image, b"e")])
+    calls.clear()
+    monkeypatch.setattr(identity, "set_score", score)
+
+    out = store.identify_uploads(
+        [("probe.jpg", bgr_image, b"p")], guided=True
+    )
+
+    assert out["match"]["name"] == "Recovered"
+    assert calls == [store.GUIDED_INITIAL_SWEEP, store.GUIDED_FALLBACK_SWEEP]
+    fallback = out["scale_fallback"]
+    assert fallback["attempted"] is True
+    assert fallback["variants"] == [0.87, 1.15]
+    assert fallback["added_templates"] == 1
+    assert fallback["score_before"] == 20.0
+    assert fallback["score_after"] == 75.0
+    assert fallback["processing_s"] >= 0
+    assert out["geometry_fallback"]["attempted"] is False
+
+
+def test_guided_verify_retries_scales_but_standard_no_match_does_not(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import identity
+
+    calls = []
+
+    def extract(bgr, **kwargs):
+        sweep = kwargs["sweep"]
+        calls.append(sweep)
+        fake_pipeline(bgr, **kwargs)
+        return [b"fallback"] if sweep == store.GUIDED_FALLBACK_SWEEP else [b"base"]
+
+    def verify(probe, enrolled, threshold):
+        score = 72.0 if b"fallback" in probe else 18.0
+        return score >= threshold, score
+
+    monkeypatch.setattr(identity, "photo_template_set", extract)
+    ident = store.create_identity("Verify", consent=True)
+    store.enroll_photos(ident["uuid"], [("enroll.jpg", bgr_image, b"e")])
+    calls.clear()
+    monkeypatch.setattr(identity, "verify", verify)
+
+    guided = store.verify_uploads(
+        ident["uuid"], [("probe.jpg", bgr_image, b"p")], guided=True
+    )
+    assert guided["verified"] is True
+    assert guided["scale_fallback"]["score_before"] == 18.0
+    assert guided["scale_fallback"]["score_after"] == 72.0
+    assert guided["geometry_fallback"]["attempted"] is False
+    assert calls == [store.GUIDED_INITIAL_SWEEP, store.GUIDED_FALLBACK_SWEEP]
+
+    calls.clear()
+    standard = store.verify_uploads(
+        ident["uuid"], [("probe.jpg", bgr_image, b"p")], guided=False
+    )
+    assert standard["verified"] is False
+    assert "scale_fallback" not in standard
+    assert "geometry_fallback" not in standard
+    assert calls == [identity.SCALE_SWEEP]
+
+
+def test_guided_identify_tries_geometric_unwrap_once_after_scale_miss(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import geometry, identity
+
+    calls = []
+
+    def unwrap(bgr, half_angle_deg):
+        calls.append(f"unwrap-{half_angle_deg:g}")
+        return np.full_like(bgr, 201)
+
+    def extract(bgr, **kwargs):
+        sweep = kwargs["sweep"]
+        kind = "geometry" if int(bgr.mean()) == 201 else (
+            "scale" if sweep == store.GUIDED_FALLBACK_SWEEP else "base"
+        )
+        if kind == "geometry":
+            assert kwargs["min_quality"] == 0
+        calls.append(kind)
+        fake_pipeline(bgr, **kwargs)
+        return [kind.encode()]
+
+    def score(probe, enrolled):
+        return 76.0 if b"geometry" in probe else 20.0
+
+    monkeypatch.setattr(geometry, "cylindrical_unwrap", unwrap)
+    monkeypatch.setattr(identity, "photo_template_set", extract)
+    ident = store.create_identity("Geometry", consent=True)
+    store.enroll_photos(ident["uuid"], [("enroll.jpg", bgr_image, b"e")])
+    calls.clear()
+    monkeypatch.setattr(identity, "set_score", score)
+
+    out = store.identify_uploads(
+        [("probe.jpg", bgr_image, b"p")], guided=True
+    )
+
+    assert out["match"]["name"] == "Geometry"
+    assert calls == [
+        "base", "scale",
+        "unwrap-35", "geometry",
+        "unwrap-55", "geometry",
+        "unwrap-65", "geometry",
+    ]
+    assert out["scale_fallback"]["score_after"] == 20.0
+    fallback = out["geometry_fallback"]
+    assert fallback["attempted"] is True
+    assert fallback["method"] == "cylindrical_unwrap"
+    assert fallback["half_angles_deg"] == list(geometry.GUIDED_HALF_ANGLES_DEG)
+    assert fallback["added_templates"] == 3
+    assert fallback["score_before"] == 20.0
+    assert fallback["score_after"] == 76.0
+    assert fallback["processing_s"] >= 0
+
+
+def test_guided_verify_tries_geometric_unwrap_once_after_scale_miss(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import geometry, identity
+
+    calls = []
+
+    def unwrap(bgr, half_angle_deg):
+        calls.append(f"unwrap-{half_angle_deg:g}")
+        return np.full_like(bgr, 202)
+
+    def extract(bgr, **kwargs):
+        kind = "geometry" if int(bgr.mean()) == 202 else "original"
+        calls.append(kind)
+        fake_pipeline(bgr, **kwargs)
+        return [kind.encode()]
+
+    def verify(probe, enrolled, threshold):
+        score = 77.0 if b"geometry" in probe else 19.0
+        return score >= threshold, score
+
+    monkeypatch.setattr(geometry, "cylindrical_unwrap", unwrap)
+    monkeypatch.setattr(identity, "photo_template_set", extract)
+    ident = store.create_identity("Geometry Verify", consent=True)
+    store.enroll_photos(ident["uuid"], [("enroll.jpg", bgr_image, b"e")])
+    calls.clear()
+    monkeypatch.setattr(identity, "verify", verify)
+
+    out = store.verify_uploads(
+        ident["uuid"], [("probe.jpg", bgr_image, b"p")], guided=True
+    )
+
+    assert out["verified"] is True
+    assert calls == [
+        "original", "original",
+        "unwrap-35", "geometry",
+        "unwrap-55", "geometry",
+        "unwrap-65", "geometry",
+    ]
+    assert out["geometry_fallback"]["attempted"] is True
+    assert out["geometry_fallback"]["score_before"] == 19.0
+    assert out["geometry_fallback"]["score_after"] == 77.0
+
+
+def test_geometric_fallback_failure_preserves_completed_no_match(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import geometry, identity
+
+    unwrap_calls = []
+
+    def failed_unwrap(bgr, half_angle_deg):
+        unwrap_calls.append(1)
+        raise ValueError("bad geometry")
+
+    monkeypatch.setattr(geometry, "cylindrical_unwrap", failed_unwrap)
+    ident = store.create_identity("Safe Geometry", consent=True)
+    store.enroll_photos(ident["uuid"], [("enroll.jpg", bgr_image, b"e")])
+    monkeypatch.setattr(identity, "set_score", lambda probe, enrolled: 20.0)
+
+    out = store.identify_uploads(
+        [("probe.jpg", bgr_image, b"p")], guided=True
+    )
+
+    assert out["match"] is None
+    assert unwrap_calls == [1]
+    assert out["geometry_fallback"]["attempted"] is True
+    assert out["geometry_fallback"]["added_templates"] == 0
+    assert out["geometry_fallback"]["error"] == "NORMALIZATION_FAILED"
+    assert out["geometry_fallback"]["score_before"] == 20.0
+    assert out["geometry_fallback"]["score_after"] == 20.0
+
+
+def test_failed_guided_scale_fallback_returns_one_completed_no_match(
+    tmp_store, fake_pipeline, bgr_image, monkeypatch
+):
+    from fingerphoto import identity
+
+    calls = []
+
+    def extract(bgr, **kwargs):
+        sweep = kwargs["sweep"]
+        calls.append(sweep)
+        if sweep == store.GUIDED_FALLBACK_SWEEP:
+            raise AcquisitionError(ReasonCode.QUALITY_TOO_LOW, "fallback unavailable")
+        fake_pipeline(bgr, **kwargs)
+        return [b"base"]
+
+    monkeypatch.setattr(identity, "photo_template_set", extract)
+    ident = store.create_identity("NoMatch", consent=True)
+    store.enroll_photos(ident["uuid"], [("enroll.jpg", bgr_image, b"e")])
+    calls.clear()
+    monkeypatch.setattr(identity, "set_score", lambda probe, enrolled: 20.0)
+
+    out = store.identify_uploads(
+        [("probe.jpg", bgr_image, b"p")], guided=True
+    )
+
+    assert out["match"] is None
+    assert out["best_candidate"]["score"] == 20.0
+    assert calls == [
+        store.GUIDED_INITIAL_SWEEP,
+        store.GUIDED_FALLBACK_SWEEP,
+        store.GUIDED_INITIAL_SWEEP,
+        store.GUIDED_INITIAL_SWEEP,
+        store.GUIDED_INITIAL_SWEEP,
+    ]
+    assert out["scale_fallback"]["attempted"] is True
+    assert out["scale_fallback"]["added_templates"] == 0
+    assert out["scale_fallback"]["error"] == "QUALITY_TOO_LOW"
+    assert out["scale_fallback"]["score_before"] == 20.0
+    assert out["scale_fallback"]["score_after"] == 20.0
+    assert out["geometry_fallback"]["attempted"] is True
+    assert out["geometry_fallback"]["score_before"] == 20.0
+    assert out["geometry_fallback"]["score_after"] == 20.0
 
 
 def test_identify_empty_gallery(tmp_store, fake_pipeline, bgr_image):

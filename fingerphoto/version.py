@@ -14,7 +14,13 @@ from pathlib import Path
 # the server scores every candidate frame with the ridge detector (frames.py)
 # and extracts only the best few. Adds best_of, video uploads on the three
 # capture endpoints, and POST /v1/quality for the live capture indicator.
-APP_VERSION = "1.1.0"
+# 1.2.0: guided autocapture chooses the best of three ridge-valid frames,
+# automatically resumes after recoverable acquisition failures, and retries
+# no-match probes at two additional scales.
+# 1.3.0: guided no-matches get one final cylindrical-unwrapping sweep. The
+# original probe remains in the match set, so the experimental transforms can
+# improve a result but cannot lower its best score.
+APP_VERSION = "1.3.0"
 # 1.1.0: the closed-loop scale correction is now clamped to the physical ridge
 # period band on every iteration and returns its best iteration rather than its
 # last. Templates from a diverging 1.0.0 run were extracted at up to 2x the

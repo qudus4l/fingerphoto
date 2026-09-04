@@ -23,9 +23,10 @@ import uuid as uuidlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import cv2
 import numpy as np
 
-from . import afis, crypto, db, frames, identity, imaging, version
+from . import afis, crypto, db, frames, geometry, identity, imaging, version
 from .errors import AcquisitionError, ReasonCode, StoreError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +46,9 @@ FINGER_POSITIONS = {
     "left_little": 10,
     "thumb": 0,  # legacy value from the pre-API store; treated as unknown side
 }
+
+GUIDED_INITIAL_SWEEP = (1.0,)
+GUIDED_FALLBACK_SWEEP = (0.87, 1.15)
 
 
 def db_path() -> Path:
@@ -170,7 +174,12 @@ def _expand_uploads(
     return selected, summary, failures
 
 
-def _extract_candidate(cand: frames.Candidate, stats: dict, guided: bool) -> list[bytes]:
+def _extract_candidate(
+    cand: frames.Candidate,
+    stats: dict,
+    guided: bool,
+    guided_sweep: tuple[float, ...] = GUIDED_INITIAL_SWEEP,
+) -> list[bytes]:
     """Extract one candidate using the appropriate acquisition contract.
 
     Guided candidates already contain only the on-screen fingerprint region,
@@ -181,7 +190,7 @@ def _extract_candidate(cand: frames.Candidate, stats: dict, guided: bool) -> lis
     return identity.photo_template_set(
         cand.pixels(),
         crop=not guided,
-        sweep=(1.0,) if guided else identity.SCALE_SWEEP,
+        sweep=guided_sweep if guided else identity.SCALE_SWEEP,
         min_minutiae=min_minutiae(),
         min_quality=min_ridge_quality(),
         stats=stats,
@@ -473,7 +482,11 @@ def _save_probe(bgr: np.ndarray, outcome: str) -> None:
     cv2.imwrite(str(d / f"{stamp}_{outcome}.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
 
-def _probe_set(cands: list[frames.Candidate], guided: bool = False) -> tuple[list[bytes], dict]:
+def _probe_set(
+    cands: list[frames.Candidate],
+    guided: bool = False,
+    guided_sweep: tuple[float, ...] = GUIDED_INITIAL_SWEEP,
+) -> tuple[list[bytes], dict]:
     """Templates from every usable candidate, unioned into one probe set.
 
     Set-max scoring downstream means extra frames can only help: a frame that
@@ -485,7 +498,7 @@ def _probe_set(cands: list[frames.Candidate], guided: bool = False) -> tuple[lis
     last: AcquisitionError | None = None
     for c in cands:
         try:
-            probe += _extract_candidate(c, {}, guided)
+            probe += _extract_candidate(c, {}, guided, guided_sweep)
             used.append(c)
         except AcquisitionError as e:
             last = e
@@ -498,6 +511,115 @@ def _probe_set(cands: list[frames.Candidate], guided: bool = False) -> tuple[lis
         "candidates": len(cands),
         "used": len(used),
         "scores": [round(c.score, 3) for c in used if c.score is not None],
+    }
+
+
+def _add_guided_scale_fallback(
+    cands: list[frames.Candidate], initial_probe: list[bytes]
+) -> tuple[list[bytes], dict]:
+    """Add the two non-default scale variants once after a guided no-match.
+
+    The initial 1.0 template remains in the set, so the second score cannot be
+    lower than the first. Failure to build a fallback variant does not turn a
+    valid acquisition into an acquisition error; the caller returns its
+    original, completed no-match instead.
+    """
+    started = time.monotonic()
+    meta: dict = {
+        "attempted": True,
+        "variants": list(GUIDED_FALLBACK_SWEEP),
+        "added_templates": 0,
+    }
+    try:
+        extra, _ = _probe_set(cands, guided=True, guided_sweep=GUIDED_FALLBACK_SWEEP)
+    except AcquisitionError as exc:
+        meta["error"] = exc.code.value
+        meta["processing_s"] = round(time.monotonic() - started, 3)
+        return initial_probe, meta
+    meta["added_templates"] = len(extra)
+    meta["processing_s"] = round(time.monotonic() - started, 3)
+    return initial_probe + extra, meta
+
+
+def _scale_fallback_meta(score: float) -> dict:
+    """Metadata for a guided request whose fast path has not needed fallback."""
+    rounded = round(score, 1)
+    return {
+        "attempted": False,
+        "variants": list(GUIDED_FALLBACK_SWEEP),
+        "added_templates": 0,
+        "score_before": rounded,
+        "score_after": rounded,
+        "processing_s": 0.0,
+    }
+
+
+def _add_guided_geometry_fallback(
+    cands: list[frames.Candidate], initial_probe: list[bytes]
+) -> tuple[list[bytes], dict]:
+    """Add a small cylindrical-curvature sweep per usable guided frame.
+
+    This runs only after the normal and scale-fallback probes both miss.  The
+    original templates stay in the set, so an approximate finger-curvature
+    model cannot lower the result.  Enrollment deliberately remains on the
+    original pixels: this first experiment changes no stored template format
+    and can be evaluated or removed independently.
+    """
+    started = time.monotonic()
+    extra: list[bytes] = []
+    last: Exception | None = None
+    for cand in cands:
+        for half_angle in geometry.GUIDED_HALF_ANGLES_DEG:
+            try:
+                unwrapped = geometry.cylindrical_unwrap(
+                    cand.pixels(), half_angle_deg=half_angle
+                )
+            except (ValueError, cv2.error) as exc:
+                # A map/image incompatibility is not angle-specific.  Do not
+                # repeat the same broken operation for every hypothesis.
+                last = exc
+                break
+            try:
+                extra += identity.photo_template_set(
+                    unwrapped,
+                    crop=False,
+                    sweep=GUIDED_INITIAL_SWEEP,
+                    min_minutiae=min_minutiae(),
+                    # The source already passed the authoritative quality gate.
+                    # Resampling changes the quality metric's ridge-frequency
+                    # distribution by construction, so gating the derived image
+                    # a second time can reject the correction under test.
+                    min_quality=0,
+                )
+            except AcquisitionError as exc:
+                last = exc
+
+    meta: dict = {
+        "attempted": True,
+        "method": "cylindrical_unwrap",
+        "half_angles_deg": list(geometry.GUIDED_HALF_ANGLES_DEG),
+        "added_templates": len(extra),
+        "processing_s": round(time.monotonic() - started, 3),
+    }
+    if not extra and last is not None:
+        meta["error"] = (
+            last.code.value if isinstance(last, AcquisitionError)
+            else "NORMALIZATION_FAILED"
+        )
+    return initial_probe + extra, meta
+
+
+def _geometry_fallback_meta(score: float) -> dict:
+    """Metadata for a guided request that did not need geometric fallback."""
+    rounded = round(score, 1)
+    return {
+        "attempted": False,
+        "method": "cylindrical_unwrap",
+        "half_angles_deg": list(geometry.GUIDED_HALF_ANGLES_DEG),
+        "added_templates": 0,
+        "score_before": rounded,
+        "score_after": rounded,
+        "processing_s": 0.0,
     }
 
 
@@ -521,6 +643,32 @@ def identify_frames(
         ranked = sorted(scores.items(), key=lambda kv: -kv[1])
         best_uuid, best_score = ranked[0]
         matched = best_score >= thr
+        fallback = _scale_fallback_meta(best_score)
+        geometry_fallback = _geometry_fallback_meta(best_score)
+        if guided and not matched:
+            score_before = best_score
+            fallback_started = time.monotonic()
+            probe, fallback = _add_guided_scale_fallback(cands, probe)
+            scores = {u: identity.set_score(probe, ts) for u, (_, ts) in gal.items()}
+            ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+            best_uuid, best_score = ranked[0]
+            matched = best_score >= thr
+            fallback["score_before"] = round(score_before, 1)
+            fallback["score_after"] = round(best_score, 1)
+            fallback["processing_s"] = round(time.monotonic() - fallback_started, 3)
+        if guided and not matched:
+            score_before = best_score
+            geometry_started = time.monotonic()
+            probe, geometry_fallback = _add_guided_geometry_fallback(cands, probe)
+            scores = {u: identity.set_score(probe, ts) for u, (_, ts) in gal.items()}
+            ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+            best_uuid, best_score = ranked[0]
+            matched = best_score >= thr
+            geometry_fallback["score_before"] = round(score_before, 1)
+            geometry_fallback["score_after"] = round(best_score, 1)
+            geometry_fallback["processing_s"] = round(
+                time.monotonic() - geometry_started, 3
+            )
         for c in cands:
             _save_probe(c.pixels(), f"{'match' if matched else 'nomatch'}-{best_score:.0f}")
         audit(con, "identify", best_uuid if matched else None, request_id,
@@ -537,6 +685,9 @@ def identify_frames(
         }
         if selection is not None:
             out["selection"] = selection
+        if guided:
+            out["scale_fallback"] = fallback
+            out["geometry_fallback"] = geometry_fallback
         return out
     finally:
         con.close()
@@ -603,6 +754,26 @@ def verify_frames(
     started = time.monotonic()
     probe, used = _probe_set(cands, guided)
     verified, score = identity.verify(probe, enrolled, thr)
+    fallback = _scale_fallback_meta(score)
+    geometry_fallback = _geometry_fallback_meta(score)
+    if guided and not verified:
+        score_before = score
+        fallback_started = time.monotonic()
+        probe, fallback = _add_guided_scale_fallback(cands, probe)
+        verified, score = identity.verify(probe, enrolled, thr)
+        fallback["score_before"] = round(score_before, 1)
+        fallback["score_after"] = round(score, 1)
+        fallback["processing_s"] = round(time.monotonic() - fallback_started, 3)
+    if guided and not verified:
+        score_before = score
+        geometry_started = time.monotonic()
+        probe, geometry_fallback = _add_guided_geometry_fallback(cands, probe)
+        verified, score = identity.verify(probe, enrolled, thr)
+        geometry_fallback["score_before"] = round(score_before, 1)
+        geometry_fallback["score_after"] = round(score, 1)
+        geometry_fallback["processing_s"] = round(
+            time.monotonic() - geometry_started, 3
+        )
     con = connect()
     try:
         audit(con, "verify", identity_uuid, request_id,
@@ -620,6 +791,9 @@ def verify_frames(
     }
     if selection is not None:
         out["selection"] = selection
+    if guided:
+        out["scale_fallback"] = fallback
+        out["geometry_fallback"] = geometry_fallback
     return out
 
 

@@ -208,7 +208,7 @@ const MIN_FILL = 0.62, MIN_LUMA = 60, MAX_LUMA = 225, MAX_CLIP = 0.18;
 // rolling window can always be satisfied by holding still.
 const FOCUS_WIN = 90, FOCUS_FLOOR = 3.0, FOCUS_RATIO = 0.72;
 const BURST = 5, BURST_MS = 110;
-const MAX_MOTION = 7.0, AUTO_HOLD_MS = 0, RIDGE_PASSES_REQUIRED = 1;
+const MAX_MOTION = 7.0, AUTO_HOLD_MS = 0, RIDGE_PASSES_REQUIRED = 3;
 const RIDGE_WINDOW_MS = 5000, RIDGE_MAX_WAIT_MS = 6500;
 
 /*__FP_CONFIG__*/
@@ -224,6 +224,7 @@ let box = null, busy = false, sticky = '', mode = 'capture';
 let focusHist = [];
 let previousGray = null, autoArmed = true, readySince = 0, autoStarting = false;
 let enrollSamples = [], awaitingRemoval = false, absentSince = 0;
+let removalNextScan = 2, removalMessage = '';
 // Frozen guide crop from the exact tick where fill/focus/light/ridge all passed.
 let snapFrame = null;
 
@@ -244,6 +245,8 @@ function setMode(m){
   enrollSamples = [];
   awaitingRemoval = false;
   absentSince = 0;
+  removalNextScan = 2;
+  removalMessage = '';
   document.querySelectorAll('.mode[data-mode]').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === m));
   const prints = m === 'prints';
@@ -474,6 +477,8 @@ async function collectFirstEnrollmentScan(){
     unfreezeStage();
     awaitingRemoval = true;
     absentSince = 0;
+    removalNextScan = 2;
+    removalMessage = '';
     $('state-text').textContent = 'Lift finger completely';
     say('First scan captured. Lift your finger, then place the same finger back for confirmation.');
   }catch(e){
@@ -494,21 +499,27 @@ function tick(){
   if(m && !busy){
     if(awaitingRemoval){
       const absent = m.fill < MIN_FILL * 0.45;
+      const retrying = removalNextScan === 1;
       if(absent && !absentSince) absentSince = performance.now();
       if(!absent) absentSince = 0;
       $('stage').classList.remove('ready');
       $('holdbar').querySelector('i').style.width = absent ? '60%' : '0%';
       $('state-text').textContent = absent ? 'Finger removed' : 'Lift finger completely';
-      say(absent ? 'Good. Place the same finger back for scan 2 of 2.'
-                 : 'First scan captured. Lift your finger completely.');
+      say(absent
+        ? (retrying ? 'Good. Place the finger back to restart scan 1 of 2.'
+                    : 'Good. Place the same finger back for scan 2 of 2.')
+        : (removalMessage || 'First scan captured. Lift your finger completely.'));
       if(absentSince && performance.now() - absentSince >= 500){
         awaitingRemoval = false;
         absentSince = 0;
+        removalMessage = '';
         sticky = '';
         setArmed(true);
         $('shoot').disabled = false;
-        $('state-text').textContent = 'Place same finger again';
-        say('Place the same finger back for scan 2 of 2.');
+        $('state-text').textContent = retrying ? 'Place finger for scan 1' : 'Place same finger again';
+        say(retrying ? 'Place the finger back to restart scan 1 of 2.'
+                     : 'Place the same finger back for scan 2 of 2.');
+        removalNextScan = 2;
       }
       requestAnimationFrame(tick);
       return;
@@ -525,8 +536,9 @@ function tick(){
     setCheck($('c-fill'), fillOk, fillOk ? 'Good' : Math.round(m.fill*100)+'%');
     setCheck($('c-focus'), focusOk && steadyOk, focusOk && steadyOk ? 'Good' : 'Wait');
     setCheck($('c-light'), lightOk, lightOk ? 'Good' : (m.clip>MAX_CLIP ? 'Glare' : 'Adjust'));
-    // The server scores this exact guide crop. Two good reads inside a rolling
-    // window confirm it; one noisy response no longer erases all progress.
+    // The server scores this exact guide crop. Three good reads inside a
+    // rolling window let us choose the best JPEG instead of locking the first
+    // acceptable one; one noisy response does not erase all progress.
     const now = Date.now();
     const localReady = fillOk && focusOk && steadyOk && lightOk;
     ridgeWorthIt = autoArmed && localReady;
@@ -535,17 +547,17 @@ function tick(){
       if(!ridgeWaitingSince) ridgeWaitingSince = now;
     }else if(now - ridgeLastLocalGoodAt > 1200){
       ridgeWaitingSince = 0;
+      clearRidgeCandidates();
     }
-    ridgeSamples = ridgeSamples.filter(s => now - s.at < RIDGE_WINDOW_MS);
-    ridgePasses = ridgeSamples.filter(s => s.passed).length;
+    refreshRidgeWindow(now);
     const ridgeFresh = ridgeSamples.length > 0;
     const confirmed = ridgeFresh && ridgePasses >= RIDGE_PASSES_REQUIRED;
     // The live score is a fast pre-check, not the enrollment verdict. Never
     // trap a person forever: after several readings, submit the best observed
     // crop and let the authoritative extraction accept or reject it.
-    const bestAvailable = localReady && ridgeWaitingSince
-      && now - ridgeWaitingSince >= RIDGE_MAX_WAIT_MS
-      && ((ridgeSamples.length >= 3 && bestRidge) || ridgeFailures >= 3);
+    const bestAvailable = ridgeFallbackEligible(
+      localReady, ridgeWaitingSince, now, ridgeSamples.length, bestRidge
+    );
     const ridgeOk = confirmed || !!bestAvailable;
     setCheck($('c-ridge'), ridgeOk,
       ridgeOk ? 'Ready' : ridgeScore == null ? 'Checking'
@@ -835,6 +847,39 @@ const FRIENDLY = {
   IMAGE_TOO_LARGE: 'Image too large for the server limit.',
 };
 
+const RETRYABLE_ACQUISITION = new Set([
+  'NO_FINGER_FOUND', 'QUALITY_TOO_LOW', 'ENROLLMENT_MISMATCH', 'UNREADABLE_IMAGE'
+]);
+
+function isRetryableAcquisition(code){
+  return RETRYABLE_ACQUISITION.has(code || '');
+}
+
+function restartAfterAcquisitionFailure(code, detail){
+  const advice = FRIENDLY[code] || detail || 'The scan could not be read.';
+  unfreezeStage();
+  resetRidgeReadings();
+  if(isVerify()){
+    setArmed(true);
+    $('state-text').textContent = 'Adjust finger — scanning again';
+    say(advice + ' Adjust the finger — auto-capture is scanning again.', 'err');
+    return;
+  }
+  // Guided enrollment is atomic. Neither scan has been stored when quality or
+  // the cross-scan self-check fails, so discard both and restart cleanly.
+  enrollSamples = [];
+  awaitingRemoval = true;
+  absentSince = 0;
+  removalNextScan = 1;
+  removalMessage = advice + ' Lift the finger completely to restart scan 1 of 2.';
+  autoArmed = false;
+  $('stage').classList.remove('ready');
+  $('shoot').disabled = true;
+  $('shoot').textContent = 'Waiting for finger to lift';
+  $('state-text').textContent = 'Lift finger to restart';
+  say(removalMessage, 'err');
+}
+
 const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 function failureCard(code, detail, selection){
@@ -891,6 +936,7 @@ async function capture(source, kind){
   $('shoot').disabled = true; $('upload').disabled = true; $('uploadvid').disabled = true;
   $('shoot').textContent = 'Working…';
   const H = {};
+  let retryFailure = null;
   try{
     let parts, used = kind;
     if(source){
@@ -925,13 +971,17 @@ async function capture(source, kind){
       if(r.status === 401) throw new Error('capture session expired — reload the page');
       if(!r.ok) throw problemError(r);
       const res = await poll(r.json.job_id, H, wait, hint);
+      const geometry = res.geometry_fallback && res.geometry_fallback.attempted
+        ? ` · geometric normalization ${res.geometry_fallback.score_before}`
+          + `→${res.geometry_fallback.score_after}`
+        : '';
       if(res.match)
         show(`<div><span class="big">Fingerprint belongs to ${esc(res.match.name)}</span>`
-           + `<span class="sub">Verified · score ${res.match.score} · ${res.processing_s ?? '–'}s processing</span>`
+           + `<span class="sub">Verified · score ${res.match.score}${geometry} · ${res.processing_s ?? '–'}s processing</span>`
            + `${traceHtml()}</div>`, 'good');
       else
         show(`<div><span class="big">Fingerprint not found</span>`
-           + `<span class="sub">No print in the system matched this scan</span>`
+           + `<span class="sub">No print in the system matched this scan${geometry}</span>`
            + `${traceHtml()}</div>`, 'err');
       return;
     }
@@ -961,7 +1011,12 @@ async function capture(source, kind){
     if(!good.length){
       const p = bad[0] || {};
       if(p.source && shotByName[p.source]) lastShot = {c: shotByName[p.source]};
-      show(failureCard(p.reason_code, p.detail, res.selection), 'err'); return;
+      if(!source && isRetryableAcquisition(p.reason_code)){
+        retryFailure = {code:p.reason_code, detail:p.detail};
+      }else{
+        show(failureCard(p.reason_code, p.detail, res.selection), 'err');
+      }
+      return;
     }
     const info = await (await sessionFetch(`/v1/identities/${uuid}`, {headers:H})).json();
     const sel = res.selection || {};
@@ -982,9 +1037,13 @@ async function capture(source, kind){
     enrollSamples = [];
   }catch(e){
     unfreezeStage();
-    show(e.code ? failureCard(e.code, e.message)
-       : `<div><span class="big">✗ Error</span><span class="sub">${esc(e.message)}</span></div>`,
-       'err');
+    if(!source && isRetryableAcquisition(e.code)){
+      retryFailure = {code:e.code, detail:e.message};
+    }else{
+      show(e.code ? failureCard(e.code, e.message)
+         : `<div><span class="big">✗ Error</span><span class="sub">${esc(e.message)}</span></div>`,
+         'err');
+    }
   }finally{
     unfreezeStage();
     if(!isVerify() && busy && enrollSamples.length) enrollSamples = [];
@@ -994,6 +1053,11 @@ async function capture(source, kind){
     // dark preview used to leave the page reading "Working…" for ever.
     $('shoot').disabled = false;
     $('shoot').textContent = shootLabel();
+    if(retryFailure){
+      restartAfterAcquisitionFailure(retryFailure.code, retryFailure.detail);
+      $('shoot').disabled = awaitingRemoval;
+      $('shoot').textContent = awaitingRemoval ? 'Waiting for finger to lift' : shootLabel();
+    }
     setTimeout(()=>{ sticky=''; }, 8000);
   }
 }
@@ -1693,11 +1757,30 @@ let ridgeWorthIt = false;   // set by tick(): framing and light are good enough
 let ridgePasses = 0, ridgeSamples = [], bestRidge = null, ridgeAdvice = '';
 let ridgeWaitingSince = 0, ridgeLastLocalGoodAt = 0, ridgeFailures = 0;
 
-function resetRidgeReadings(){
+function clearRidgeCandidates(){
   ridgeScore = null;
   ridgePasses = 0;
   ridgeSamples = [];
   bestRidge = null;
+}
+
+function refreshRidgeWindow(now){
+  ridgeSamples = ridgeSamples.filter(s => now - s.at < RIDGE_WINDOW_MS);
+  ridgePasses = ridgeSamples.filter(s => s.passed).length;
+  bestRidge = ridgeSamples.reduce((best, sample) =>
+    !best || sample.score >= best.score ? sample.frame : best, null);
+}
+
+function recordRidgeSample(frame, passed){
+  ridgeSamples.push({
+    at: frame.at, passed: !!passed, score: frame.score, frame
+  });
+  refreshRidgeWindow(frame.at);
+  return passed && ridgePasses >= RIDGE_PASSES_REQUIRED ? bestRidge : null;
+}
+
+function resetRidgeReadings(){
+  clearRidgeCandidates();
   if(!busy && !autoStarting) snapFrame = null;
   ridgeAdvice = '';
   ridgeWaitingSince = 0;
@@ -1713,6 +1796,11 @@ function qualityAdvice(result){
   if(q.spectral_frac < .05) return 'Move closer and let the camera focus';
   if(q.coherence_frac < .10) return 'Hold the finger still for a clearer read';
   return `Keep steady — ridge score ${result.score.toFixed(2)} / ${ridgeGate.toFixed(2)}`;
+}
+
+function ridgeFallbackEligible(localReady, waitingSince, now, sampleCount, best){
+  return !!(localReady && waitingSince
+    && now - waitingSince >= RIDGE_MAX_WAIT_MS && sampleCount >= 3 && best);
 }
 
 function cropCanvas(b){
@@ -1750,6 +1838,7 @@ async function ridgeLoop(){
       const r = await sessionFetch('/v1/quality', {method:'POST', body:fd});
       if(r.status === 401){
         ridgeStop = true; ridgeScore = null;
+        clearRidgeCandidates();
         ridgeAdvice = 'Capture session expired — reload the page';
         continue;
       }
@@ -1761,18 +1850,15 @@ async function ridgeLoop(){
       const j = await r.json();
       ridgeScore = j.score;
       if(typeof j.min_ridge_quality === 'number') ridgeGate = j.min_ridge_quality;
-      const at = Date.now(), passed = j.pass === true || ridgeScore >= ridgeGate;
-      ridgeSamples = ridgeSamples.filter(s => at - s.at < RIDGE_WINDOW_MS);
-      ridgeSamples.push({at, passed, score:ridgeScore});
-      ridgePasses = ridgeSamples.filter(s => s.passed).length;
       ridgeAdvice = qualityAdvice(j);
       ridgeFailures = 0;
+      const at = Date.now();
+      const passed = j.pass === true || (j.pass == null && ridgeScore >= ridgeGate);
       const frame = {at, score:ridgeScore, canvas:c, blob};
-      if(!bestRidge || ridgeScore >= bestRidge.score) bestRidge = frame;
-      // Fire from the quality response itself: the JPEG in hand is already the
-      // frame that just made Ridges go Ready while the other meters were green.
-      if(passed && ridgePasses >= RIDGE_PASSES_REQUIRED && ridgeWorthIt)
-        commitCapture(frame);
+      const accepted = recordRidgeSample(frame, passed);
+      // Fire from the response that supplied the third pass, but lock the best
+      // JPEG in the rolling window rather than whichever frame arrived third.
+      if(accepted && ridgeWorthIt) commitCapture(accepted);
     }catch(e){
       ridgeFailures++;
       ridgeAdvice = 'Network interrupted — retrying ridge check';
